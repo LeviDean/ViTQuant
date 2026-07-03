@@ -28,6 +28,9 @@ class ObserverBase(nn.Module):
 
     def _reduce(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Per-channel: min/max over all dims except ch_axis. Per-tensor: global."""
+        # Stats are always kept in fp32 regardless of input dtype: calibration in
+        # this framework runs on the fp32 pretrained model, and qparams derived
+        # from fp32 stats stay precise even if inputs were lower precision.
         x = x.detach().float()
         if self.cfg.per_channel:
             flat = x.transpose(0, self.cfg.ch_axis).flatten(1)
