@@ -20,3 +20,25 @@ def test_frozen():
     import dataclasses, pytest
     with pytest.raises(dataclasses.FrozenInstanceError):
         QConfig().weight.bits = 4
+
+
+def test_load_config_yaml(tmp_path):
+    from pathlib import Path
+    from vitquant.utils.config import load_config
+
+    p = tmp_path / "c.yaml"
+    p.write_text("model:\n  name: deit_tiny_patch16_224\ndevice: auto\n")
+    cfg = load_config(p)
+    assert cfg["model"]["name"] == "deit_tiny_patch16_224"
+
+
+def test_shipped_configs_parse():
+    from pathlib import Path
+    from vitquant.utils.config import load_config
+    from vitquant.quant.qconfig import qconfig_from_dict
+
+    for name in ("deit_tiny", "vit_base"):
+        cfg = load_config(Path("configs") / f"{name}.yaml")
+        for key in ("model", "data", "quant", "eval", "benchmark", "device", "output_dir"):
+            assert key in cfg, f"{name}.yaml missing '{key}'"
+        qconfig_from_dict(cfg["quant"])  # must build without error
