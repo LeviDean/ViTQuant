@@ -55,15 +55,17 @@ def block_sensitivity(model: nn.Module, loader: DataLoader, class_indices: list[
     Returns {group_name: top1_drop} sorted most-sensitive first.
     Requires a calibrated model; leaves it fully quantizing afterwards."""
     groups = _fq_groups(model)
-    set_quantizing(model, False)
-    base = evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
-    drops = {}
-    for key, fqs in groups.items():
-        for m in fqs:
-            m.quantizing = True
-        acc = evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
-        drops[key] = base - acc
-        for m in fqs:
-            m.quantizing = False
-    set_quantizing(model, True)
+    try:
+        set_quantizing(model, False)
+        base = evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
+        drops = {}
+        for key, fqs in groups.items():
+            for m in fqs:
+                m.quantizing = True
+            acc = evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
+            drops[key] = base - acc
+            for m in fqs:
+                m.quantizing = False
+    finally:
+        set_quantizing(model, True)  # never leave the model half-quantized
     return dict(sorted(drops.items(), key=lambda kv: -kv[1]))
