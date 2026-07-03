@@ -11,6 +11,9 @@ def topk_correct(logits: torch.Tensor, targets: torch.Tensor,
 
 
 class AccuracyMeter:
+    """Accumulates top-k correct counts across batches.
+    The top1/top5 properties require 1 and 5 to be present in ks."""
+
     def __init__(self, ks: tuple[int, ...] = (1, 5)):
         self.ks = ks
         self.correct = {k: 0 for k in ks}
