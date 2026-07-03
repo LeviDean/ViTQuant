@@ -30,7 +30,8 @@ class QuantConv2d(nn.Conv2d):
     def from_float(cls, mod: nn.Conv2d, qconfig: QConfig) -> "QuantConv2d":
         new = cls(mod.in_channels, mod.out_channels, mod.kernel_size,
                   stride=mod.stride, padding=mod.padding, dilation=mod.dilation,
-                  groups=mod.groups, bias=mod.bias is not None)
+                  groups=mod.groups, bias=mod.bias is not None,
+                  padding_mode=mod.padding_mode)
         new.weight = mod.weight
         new.bias = mod.bias
         new.input_fq = FakeQuantize(qconfig.activation)

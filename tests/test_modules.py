@@ -46,6 +46,14 @@ def test_quant_conv2d():
     assert (qconv(x) - conv(x)).abs().mean() < 0.1 * conv(x).abs().mean()
 
 
+def test_quant_conv2d_preserves_padding_mode():
+    conv = nn.Conv2d(3, 8, kernel_size=3, padding=1, padding_mode="reflect")
+    qconv = QuantConv2d.from_float(conv, QConfig())
+    x = torch.randn(2, 3, 16, 16)
+    assert qconv.padding_mode == "reflect"
+    assert torch.allclose(qconv(x), conv(x), atol=1e-6)
+
+
 def test_quant_matmul():
     mm = QuantMatMul(QConfig())
     a, b = torch.randn(2, 4, 8), torch.randn(2, 8, 4)
