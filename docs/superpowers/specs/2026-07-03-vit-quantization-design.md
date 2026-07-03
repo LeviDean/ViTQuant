@@ -52,7 +52,10 @@ vitquant/
 │   ├── quantize_ort.py        # ORT 静态量化：QDQ 格式，权重 per-channel，激活校准
 │   └── benchmark.py           # 延迟测量（warmup + 多次取中位数）、体积统计
 ├── models/
-│   └── loader.py              # timm 模型加载（vit_base_patch16_224 / deit_tiny_patch16_224）
+│   └── loader.py              # timm 模型构建（pretrained=False）+ 从本地 checkpoint 目录加载权重
+│                              # 权重路径由 config 指定，框架不做任何联网下载
+├── utils/
+│   └── device.py              # 设备自动检测：cuda > mps > cpu，可由 config 覆盖
 ├── data/
 │   └── imagenette.py          # Imagenette 下载、DataLoader、Imagenette→ImageNet-1k 类别索引映射
 ├── eval/
@@ -89,8 +92,10 @@ vitquant/
 - **模型**：
   - `vit_base_patch16_224`（~86M 参数）——主要评估对象
   - `deit_tiny_patch16_224`（~5M 参数）——开发迭代与快速验证
-  - 均为 ImageNet-1k 预训练权重（timm）
+  - 均为 ImageNet-1k 预训练权重（timm 架构定义）
+  - **权重获取**：框架不联网下载。用户手动将 checkpoint 放入 `weights/` 目录（或 config 指定路径），`loader.py` 用 `timm.create_model(pretrained=False)` 构建架构后从本地加载 state_dict。缺失时给出明确报错与下载指引。
 - **数据**：Imagenette v2（ImageNet 的 10 类子集，160px 版 ~100MB）
+  - 支持自动下载，也支持 config 指定已有的本地数据路径（服务器离线场景）
   - 预训练 ViT 可直接评估：预测 1000 类 logits 后，映射到 Imagenette 的 10 个 ImageNet 类别索引取 argmax
   - 无需微调即得真实 top-1/top-5
 
@@ -100,7 +105,7 @@ vitquant/
 
 1. **精度对比表**：FP32 baseline / INT8 模拟量化 / INT8 ORT 真实量化 的 top-1、top-5 及精度差
 2. **真实体积**：fp32 `.onnx` vs int8 `.onnx` 落盘大小（MB）与压缩比
-3. **真实延迟**：ORT CPU（M5）上 fp32 vs int8 的单图延迟（ms，中位数）与加速比
+3. **真实延迟**：ORT 上 fp32 vs int8 的单图延迟（ms，中位数）与加速比。int8 加速以 **CPU EP** 为主报告口径（int8 CPU 加速最有代表性）；服务器上可选 CUDA EP 补充 fp32 GPU 基线
 4. **逐层敏感度分析**：逐个 block/layer 单独量化，量化其余保持 fp32，报告各层引起的精度下降排名
 5. **消融矩阵**：粒度 × 对称性 × Observer 的精度对比
 
@@ -113,12 +118,15 @@ vitquant/
 
 ## 8. 环境
 
-| 项 | 值 |
-|---|---|
-| 硬件 | Apple M5 / 32GB RAM（CPU 推理） |
-| Python | 3.14.5 |
-| 依赖 | torch 2.12.1、timm、onnx、onnxruntime、pyyaml |
-| 数据 | Imagenette v2 160px（~100MB 自动下载） |
+| 项 | 开发机 | 运行服务器 |
+|---|---|---|
+| 硬件 | Apple M5 / 32GB RAM | Linux + NVIDIA GPU |
+| 设备 | mps / cpu（自动检测） | cuda（自动检测） |
+| Python | 3.14.5 | 3.10+ 均可 |
+| 依赖 | torch、timm、onnx、onnxruntime、pyyaml | 同左；onnxruntime-gpu 可选 |
+
+- 代码不写死任何设备/路径：设备用 `utils/device.py` 自动检测（config 可覆盖），模型权重与数据路径全部走 config。
+- 开发机上用 `deit_tiny` + 小样本冒烟验证流程；完整 `vit_base` 评估在服务器上执行。
 
 ## 9. 已确认的决策记录
 
@@ -129,3 +137,5 @@ vitquant/
 | 量化内核 | 自研（Observer + FakeQuant + 模块替换） | 全透明，适合精度研究 |
 | 部署后端 | ONNX Runtime | 跨平台成熟稳定，CPU int8 真实加速，Python 3.14 兼容 |
 | 模拟 vs 真实 | 两层都做 | 模拟量化量精度，ORT 给真实交付数字 |
+| 开发/运行分离 | Mac 开发，Linux+NVIDIA GPU 服务器运行 | 设备自动检测，路径全走 config |
+| 模型权重 | 用户手动下载，框架不联网 | 本地 checkpoint 加载，缺失时明确报错 |
