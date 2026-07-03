@@ -50,3 +50,23 @@ def test_converted_model_has_fake_quant():
     qmodel = convert_vit(_tiny_vit(), QConfig())
     n = sum(1 for m in qmodel.modules() if isinstance(m, FakeQuantize))
     assert n > 50  # 12 blocks x (qkv+proj+2 mlp) x 2 + matmuls + patch embed
+
+
+def test_converted_module_names_stable():
+    # Task 11 groups FakeQuantize modules by these name prefixes — pin the contract.
+    names = dict(convert_vit(_tiny_vit(), QConfig()).named_modules())
+    assert "patch_embed.proj.input_fq" in names
+    assert "blocks.0.attn.qkv.input_fq" in names
+    assert "blocks.0.attn.qk_matmul.a_fq" in names
+    assert "blocks.0.mlp.fc1.weight_fq" in names
+
+
+def test_quant_attention_mask_path_matches_timm():
+    torch.manual_seed(0)
+    attn = Attention(dim=64, num_heads=4).eval()
+    qattn = QuantAttention.from_float(attn, QConfig()).eval()
+    x = torch.randn(2, 5, 64)
+    mask = torch.randn(2, 1, 5, 5)
+    with torch.no_grad():
+        assert torch.allclose(qattn(x, attn_mask=mask), attn(x, attn_mask=mask),
+                              atol=1e-5)

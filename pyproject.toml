@@ -6,7 +6,9 @@ requires-python = ">=3.10"
 dependencies = [
     "torch",
     "torchvision",
-    "timm",
+    # QuantAttention mirrors timm's internal Attention (resolve_self_attn_mask);
+    # keep the range narrow and re-verify test_convert.py when bumping.
+    "timm>=1.0.27,<1.1",
     "onnx",
     "onnxruntime",
     "pyyaml",
