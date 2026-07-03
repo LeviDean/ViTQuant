@@ -7,7 +7,8 @@ from torch.utils.data import DataLoader
 
 
 class TorchCalibrationReader(CalibrationDataReader):
-    """Feeds batches from a torch DataLoader to ORT static quantization."""
+    """Feeds batches from a torch DataLoader to ORT static quantization.
+    All batches are materialized in memory up front (fine for ~256 calib images)."""
 
     def __init__(self, loader: DataLoader, num_batches: Optional[int] = None,
                  input_name: str = "input"):
@@ -32,14 +33,16 @@ def quantize_onnx(fp32_path: str | Path, int8_path: str | Path,
     research-layer default: weight per-channel symmetric int8)."""
     fp32_path, int8_path = Path(fp32_path), Path(int8_path)
     pre_path = fp32_path.with_suffix(".pre.onnx")
-    quant_pre_process(str(fp32_path), str(pre_path))  # shape inference + optimization
-    quantize_static(
-        str(pre_path), str(int8_path),
-        TorchCalibrationReader(calib_loader, num_batches),
-        quant_format=QuantFormat.QDQ,
-        per_channel=True,
-        weight_type=QuantType.QInt8,
-        activation_type=QuantType.QUInt8,  # U8S8: recommended for x86-64 CPU EP
-    )
-    pre_path.unlink(missing_ok=True)
+    try:
+        quant_pre_process(str(fp32_path), str(pre_path))  # shape inference + optimization
+        quantize_static(
+            str(pre_path), str(int8_path),
+            TorchCalibrationReader(calib_loader, num_batches),
+            quant_format=QuantFormat.QDQ,
+            per_channel=True,
+            weight_type=QuantType.QInt8,
+            activation_type=QuantType.QUInt8,  # U8S8: recommended for x86-64 CPU EP
+        )
+    finally:
+        pre_path.unlink(missing_ok=True)
     return int8_path
