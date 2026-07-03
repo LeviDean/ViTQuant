@@ -1,8 +1,23 @@
+import pytest
 import torch
 
 from vitquant.quant.qconfig import TensorQConfig
+from vitquant.quant.observers import CalibrationError
 from vitquant.quant.fake_quant import (FakeQuantize, fake_quantize, freeze_qparams,
                                        set_observing, set_quantizing)
+
+
+def test_fake_quantize_per_channel_conv_shaped():
+    x = torch.randn(4, 3, 2, 2)  # Conv2d weight layout [out, in, kh, kw]
+    scale = x.abs().amax(dim=(1, 2, 3)) / 127
+    out = fake_quantize(x, scale, torch.zeros(4), -127, 127, ch_axis=0)
+    assert (out - x).abs().max() <= scale.max().item() / 2 + 1e-6
+
+
+def test_freeze_without_stats_raises():
+    fq = FakeQuantize(TensorQConfig())
+    with pytest.raises(CalibrationError):
+        fq.freeze()
 
 
 def test_fake_quantize_roundtrip_error_bounded():
