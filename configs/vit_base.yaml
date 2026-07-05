@@ -1,0 +1,26 @@
+# Server config: full evaluation target.
+model:
+  name: vit_base_patch16_224
+  checkpoint: weights/vit_base_patch16_224.pth
+
+data:
+  root: data
+  download: true
+  batch_size: 64
+  num_workers: 8
+  calib_images: 256
+  calib_batch_size: 32
+
+quant:
+  weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+
+eval:
+  max_batches: null
+
+benchmark:
+  runs: 50
+  warmup: 10
+
+device: auto
+output_dir: outputs/vit_base
