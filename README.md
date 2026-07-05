@@ -29,6 +29,10 @@ Copy the files into `weights/`. Imagenette (~100MB) downloads automatically on
 first run; set `data.download: false` and pre-copy `data/imagenette2-160/` for
 offline servers.
 
+> macOS + python.org Python: if the Imagenette download fails with
+> `SSL: CERTIFICATE_VERIFY_FAILED`, prefix the command with
+> `SSL_CERT_FILE=$(.venv/bin/python -m certifi)`.
+
 ## Usage
 
 ```bash
