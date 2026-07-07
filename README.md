@@ -87,6 +87,57 @@ quant:
   > layer — the research layer's simulated W4A8 accuracy numbers stay valid
   > either way, since they never touch ORT.
 
+## SAM: vision-encoder-only quantization (self-consistency IoU)
+
+Alongside the classification ViT pipeline above, this framework also quantizes
+the **image encoder (ViT backbone)** of Segment Anything (SAM), via
+HuggingFace `transformers.SamModel`. Only `model.vision_encoder` is converted
+to INT8 — `prompt_encoder` and `mask_decoder` stay fp32. Since SAM has no
+single "top-1 accuracy" metric, evaluation instead measures **self-consistency**:
+for the same image + point prompt, how similar are the fp32 model's predicted
+masks to the quantized model's predicted masks (IoU, per mask hypothesis)?
+High IoU means quantization didn't change what the model segments. This is
+**not** a ground-truth accuracy benchmark (e.g. mIoU against COCO) — that's a
+deliberate current-phase scope decision, not an oversight.
+
+### Weights (manual, offline)
+
+Same "never downloads" policy as the classification models, but a SAM/HF
+checkpoint is a local **directory** (`config.json` + weight files produced by
+`save_pretrained`), not a single `.pth` file:
+
+```bash
+python -c "from transformers import SamModel, SamProcessor; \
+SamModel.from_pretrained('facebook/sam-vit-base').save_pretrained('weights/sam-vit-base'); \
+SamProcessor.from_pretrained('facebook/sam-vit-base').save_pretrained('weights/sam-vit-base')"
+```
+
+Copy (or generate directly on the target machine) the resulting
+`weights/sam-vit-base/` directory before running offline.
+
+### Usage
+
+```bash
+python scripts/quantize_sam.py --config configs/sam_vit_b.yaml
+```
+
+Output: `outputs/sam_vit_b/sam_consistency.json` with `mean_iou`, `min_iou`,
+and `per_sample_iou` (per-sample, per-mask-hypothesis IoU values).
+
+### Current scope boundaries
+
+These are deliberate staged decisions for this phase, not bugs — follow-ups
+for a future phase:
+
+- **Only the vision encoder is quantized.** `mask_decoder` (and
+  `prompt_encoder`) are not touched and remain fp32.
+- **No ONNX export / real ORT delivery layer for SAM yet.** The classification
+  ViT pipeline has a delivery layer (`vitquant/deploy/`, real on-disk
+  compression + real CPU int8 latency); SAM does not yet.
+- **Evaluation is self-consistency only, not ground-truth mIoU** (e.g. against
+  COCO). The IoU numbers here measure agreement between fp32 and quantized
+  masks, not segmentation quality against a labeled benchmark.
+
 ## ORT graph-optimization crashes on some CPUs (cloud/virtualized x86-64)
 
 Confirmed on an AMD EPYC cloud VM (nested virtualization, no AVX-512): ORT's

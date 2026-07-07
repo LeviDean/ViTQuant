@@ -1,0 +1,18 @@
+# SAM ViT-B: quantize only the image encoder (ViT backbone), report
+# fp32-vs-quantized mask self-consistency (IoU) — no ground truth needed.
+model:
+  name: facebook/sam-vit-base
+  checkpoint: weights/sam-vit-base
+
+data:
+  root: data
+  download: true          # set false on offline servers with data pre-copied
+  calib_samples: 16
+  eval_samples: 16
+
+quant:
+  weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+
+device: auto
+output_dir: outputs/sam_vit_b
