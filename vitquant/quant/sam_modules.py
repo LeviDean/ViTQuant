@@ -19,7 +19,7 @@ class QuantSamAttention(nn.Module):
         nn.Module.__init__(new)
         new.num_attention_heads = attn.num_attention_heads
         new.scale = attn.scale
-        new.dropout = attn.dropout
+        new.dropout = attn.dropout  # a plain float on SamVisionAttention too, not an nn.Dropout
         new.use_rel_pos = attn.use_rel_pos
         if new.use_rel_pos:
             new.rel_pos_h = attn.rel_pos_h

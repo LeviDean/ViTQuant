@@ -17,6 +17,14 @@ def convert_sam_vision_encoder(model: nn.Module, qconfig: QConfig) -> nn.Module:
 def _convert(module: nn.Module, qconfig: QConfig) -> None:
     for name, child in list(module.named_children()):
         if isinstance(child, SamVisionAttention):
+            # isinstance (not exact-type) deliberately also matches the
+            # SamVisionSdpaAttention subclass, which is what from_pretrained
+            # actually constructs by default (config._attn_implementation ==
+            # "sdpa"). QuantSamAttention always reimplements the eager,
+            # decomposed-matmul math regardless of which variant it replaces,
+            # since that's what exposes q@k^T/attn@v for fake-quant hooks —
+            # verified numerically identical (exact match) to the source
+            # SdpaAttention's output before calibration.
             setattr(module, name, QuantSamAttention.from_float(child, qconfig))
         elif isinstance(child, nn.Linear):
             setattr(module, name, QuantLinear.from_float(child, qconfig))
