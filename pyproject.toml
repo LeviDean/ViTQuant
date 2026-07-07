@@ -7,7 +7,7 @@ dependencies = [
     "torch",
     "torchvision",
     # QuantAttention mirrors timm's internal Attention (resolve_self_attn_mask);
-    # keep the range narrow and re-verify test_convert.py when bumping.
+    # keep the range narrow and re-verify on bump.
     "timm>=1.0.27,<1.1",
     "onnx",
     "onnxruntime",
@@ -15,15 +15,9 @@ dependencies = [
     "numpy",
 ]
 
-[project.optional-dependencies]
-dev = ["pytest"]
-
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["vitquant*"]
-
-[tool.pytest.ini_options]
-markers = ["slow: long-running integration tests (deselect with '-m \"not slow\"')"]

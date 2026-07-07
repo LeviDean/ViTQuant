@@ -13,7 +13,7 @@ ViT INT8 quantization framework with two layers:
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
+.venv/bin/pip install -e .
 ```
 
 ## Weights (manual, offline)
@@ -48,12 +48,3 @@ sensitivity / ablation tables) and `results.json`.
 
 Single experiments: `scripts/quantize.py --config ...` (simulated INT8 only),
 `scripts/evaluate.py --config ... [--onnx path]`.
-
-## Tests
-
-```bash
-.venv/bin/pytest -m "not slow"   # fast unit tests
-.venv/bin/pytest                 # includes ORT quantization integration
-```
-
-All tests use random weights and random tensors — no downloads required.
