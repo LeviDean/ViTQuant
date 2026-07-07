@@ -86,7 +86,14 @@ def quantize_onnx(fp32_path: str | Path, int8_path: str | Path,
     fp32_path, int8_path = Path(fp32_path), Path(int8_path)
     pre_path = fp32_path.with_suffix(".pre.onnx")
     try:
-        quant_pre_process(str(fp32_path), str(pre_path))  # shape inference + optimization
+        # auto_merge + guess_output_rank let symbolic shape inference complete
+        # on graphs whose dynamic reshapes it can't fully resolve on its own —
+        # notably SAM's windowed-attention partition/unpartition reshapes, which
+        # otherwise raise "Incomplete symbolic shape inference". Harmless for
+        # graphs (like the classification ViT) that already infer cleanly:
+        # these only kick in as fallbacks when a conflict/gap is hit.
+        quant_pre_process(str(fp32_path), str(pre_path),  # shape inference + optimization
+                          auto_merge=True, guess_output_rank=True)
         quantize_static(
             str(pre_path), str(int8_path),
             TorchCalibrationReader(calib_loader, num_batches),
