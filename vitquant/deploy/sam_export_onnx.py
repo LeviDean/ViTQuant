@@ -50,7 +50,13 @@ def export_sam_vision_encoder_onnx(model, out_path: str | Path,
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    wrapper = _VisionEncoderWrapper(model.vision_encoder).eval()
+    # Export/trace/parity all happen on CPU regardless of where the caller's
+    # model lives (it may be on cuda/mps): the exported graph targets ORT CPU
+    # anyway, and torch.onnx tracing + the CPU parity dummy must share a device.
+    # This moves the shared vision_encoder to CPU in place (same as the
+    # classification export_fp32_onnx, which does model.eval().cpu()) — harmless
+    # because the next consumer re-runs .to(device); no-op if already on CPU.
+    wrapper = _VisionEncoderWrapper(model.vision_encoder).eval().cpu()
     dummy = torch.randn(1, 3, img_size, img_size)
     torch.onnx.export(
         wrapper, (dummy,), str(out_path),
