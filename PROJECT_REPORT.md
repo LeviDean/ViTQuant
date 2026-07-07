@@ -1,20 +1,34 @@
 # ViTQuant 项目实施报告
 
-本文档详细说明 ViTQuant 项目具体做了什么：架构设计、每个模块的实现内容、实测得到的结果，以及在服务器部署过程中排查并解决的一系列硬件兼容性问题。
+本文档详细说明 ViTQuant 项目具体做了什么：架构设计、每个模块的实现内容，以及实测得到的结果。
 
-## 1. 项目目标
+## 1. 项目目标与当前定位
 
-为 Vision Transformer 构建一个 INT8 量化框架，同时满足两个诉求：
+项目的实际部署目标是**边缘 NPU**，不是 CPU。因此项目当前阶段是**纯模拟量化研究**，
+不追求任何真实部署产物——CPU 上的"真实 int8 加速/体积压缩"对边缘 NPU 场景没有意义，
+真实延迟只能在目标 NPU 的真实工具链和 kernel 上测得，在这之前无法有意义地模拟。
 
-- **精度研究**：量化策略（位宽、粒度、对称性、Observer 类型）完全可插拔，支持逐层敏感度分析和消融实验
-- **工程交付**：产出真正能在生产环境跑起来、有真实体积压缩和真实延迟数字的部署产物，而不是纸面上的模拟数据
-
-为此采用**两层架构**：
+框架现在是**单层架构**：
 
 | 层 | 目录 | 作用 |
 |---|---|---|
 | 研究层 | `vitquant/quant/` | 自研 fake-quant 内核，模拟量化，只测精度不测速度 |
-| 交付层 | `vitquant/deploy/` | 导出 ONNX，用 ONNX Runtime 做真实 INT8 静态量化，真实体积/延迟 |
+
+> 备注：项目早期曾有一个交付层（`vitquant/deploy/`：ONNX 导出 + ONNX Runtime 真实
+> INT8 量化 + CPU 延迟基准），在转向 NPU 预研后已整体删除；相关实现和踩坑记录仍可在
+> git 历史中找到（`vitquant/deploy` 目录删除前的版本），此处不再展开。
+
+研究层保留并可迁移到任意未来目标设备的产出是：
+
+- **精度保持率**：某个量化方案（位宽/粒度/对称性）相对 fp32 基线的精度损失
+- **逐层敏感度**：哪些 block 对量化最敏感，为未来在真实硬件上决定"哪些层保留高精度"提供依据
+- **方案消融**：不同 Observer、对称性、粒度的精度对比，与具体 runtime 无关
+- **理论压缩比**：纯粹从位宽算出的算术比值（如 int8 权重是 fp32 的 1/4），与目标硬件无关
+
+`QConfig` 保持可插拔正是为了这个目的：一旦确定了具体的 NPU 型号，可以直接把量化方案
+（逐张量/逐通道、对称/非对称、位宽）改成该 NPU 要求的方案，在接触厂商工具链之前先拿到
+一个精度参考。`deit_tiny_w4a8.yaml` 这个 W4A8 配置的意义也在这里——很多边缘 NPU 偏好
+4-bit 权重，提前测出降到 4-bit 的精度代价是有价值的预研工作。
 
 ## 2. 研究层：自研量化内核
 
@@ -22,7 +36,7 @@
 
 `TensorQConfig`（frozen dataclass）描述单一张量（权重或激活）的量化方案：位宽（`bits`）、是否对称（`symmetric`）、是否逐通道（`per_channel`）、通道轴（`ch_axis`）、Observer 类型（`observer`）、百分位阈值（`percentile`）。
 
-`QConfig` 组合权重和激活两套 `TensorQConfig`，默认方案：权重逐通道对称 INT8，激活逐张量非对称 INT8（moving-average observer）。`qconfig_from_dict()` 支持从 YAML 加载的 dict 直接构造，位宽等参数完全独立可配置——这也是后续能直接支持 W4A8 等任意位宽组合的基础，不需要改代码，改配置文件即可。
+`QConfig` 组合权重和激活两套 `TensorQConfig`，默认方案：权重逐通道对称 INT8，激活逐张量非对称 INT8（moving-average observer）。`qconfig_from_dict()` 支持从 YAML 加载的 dict 直接构造，位宽等参数完全独立可配置——这也是能直接支持 W4A8 等任意位宽组合的基础，不需要改代码，改配置文件即可。
 
 ### 2.2 Observer（`vitquant/quant/observers.py`）
 
@@ -45,7 +59,7 @@ dq = (q - zero_point) * scale
 
 反向传播用直通估计器（Straight-Through Estimator，STE）：前向输出 `dq`，反向梯度按恒等函数传递（`x + (dq - x).detach()`），这样量化点不可导的问题被绕过，模型仍可训练/校准。
 
-`FakeQuantize` 模块有三种状态：`observing`（收集统计量，直通不改变数值）、`quantizing`（应用量化）、都不开（恒等映射）。`freeze()` 从 Observer 计算出 scale/zero_point 并切换到量化模式。这就是"模拟量化"的含义——数值上经过量化再反量化回 fp32，用 fp32 继续计算，所以能精确测精度损失，但不会有任何真实加速。
+`FakeQuantize` 模块有三种状态：`observing`（收集统计量，直通不改变数值）、`quantizing`（应用量化）、都不开（恒等映射）。`freeze()` 从 Observer 计算出 scale/zero_point 并切换到量化模式。这就是"模拟量化"的含义——数值上经过量化再反量化回 fp32，用 fp32 继续计算，所以能精确测精度损失，但不会有任何真实加速，也不产生任何真实的磁盘体积变化。
 
 ### 2.4 量化模块（`vitquant/quant/modules.py`）
 
@@ -75,38 +89,13 @@ dq = (q - zero_point) * scale
 ### 3.2 评估循环（`evaluate.py`）
 
 - `evaluate_torch()`：PyTorch 模型评估，把 1000 类 logits 切到 Imagenette 对应的 10 个类别索引上再算 top-1/top-5
-- `evaluate_onnx()`：同样逻辑，但通过 ONNX Runtime 推理
 - `block_sensitivity()`：逐块敏感度分析——先测全 fp32 基线，然后每次只让一个 block（`patch_embed`、`blocks.0`……`blocks.11`）量化、其余保持 fp32，测量精度下降幅度，按下降程度从高到低排序。用 `try/finally` 保证扫描过程中即使抛异常，模型也会被恢复成完全量化状态，不会留下半量化的脏状态。
 
 两个函数都支持可选的 `progress` 回调（每完成约 20% 的 batch 打一行状态），`block_sensitivity` 额外支持 `log` 回调汇报当前扫到第几个 block——这是服务器上跑长时间任务时避免"看起来像卡住"而加的。
 
-## 4. 交付层：真实部署（`vitquant/deploy/`）
+## 4. SAM：vision-encoder-only 量化
 
-### 4.1 ONNX 导出（`export_onnx.py`）
-
-`export_fp32_onnx()` 导出**原始 fp32 模型**（不是量化后的模型）到 ONNX，动态 batch 维度，导出后立即：
-
-1. 用 `onnx.checker.check_model` 校验图的合法性
-2. 拿同一个输入分别过 PyTorch 和 ONNX Runtime，要求数值一致（`atol=1e-4`），不一致直接抛错
-
-这是一个数值一致性硬闸，保证导出的 ONNX 图和研究层用的 PyTorch 模型是"同一个模型"，而不是巧合地长得像。
-
-### 4.2 ORT 静态量化（`quantize_ort.py`）
-
-`TorchCalibrationReader` 把 PyTorch DataLoader 的校准数据喂给 ORT 的量化 API。`quantize_onnx()` 做的事：
-
-1. `quant_pre_process`：ONNX 图的形状推断与预处理优化
-2. `quantize_static`：真正的静态量化，per-channel 权重（对齐研究层默认方案），激活用 `QUInt8`（x86-64 CPU EP 推荐类型）
-
-支持的参数化维度（都是这次实测过程中逐步加上的）：
-
-- **`weight_bits`**（8 或 4）：8 是默认的成熟 INT8 路径；4 走 ORT 的 int4 contrib 算子（`com.microsoft` 域），产出更小的体积（实测约 6.5x 压缩 vs INT8 的 3.6x），但没有真实 CPU 加速（CPU EP 没有原生 int4 矩阵乘 kernel）
-- **`quant_format`**（`qdq` 或 `qoperator`）：`qdq` 插入 QuantizeLinear/DequantizeLinear 节点，依赖 ORT 运行时优化器把它们融合成快速 int8 kernel；`qoperator` 在量化时就直接把量化算子（如 `QLinearMatMul`）写死进图里，不依赖运行时融合
-- **`graph_optimization_level`**（通过 `vitquant/utils/ort_session.py::create_cpu_session` 统一管理）：可选地限制 ORT 的图优化级别，默认用 ORT 自己的最优设置
-
-### 4.3 基准测试（`benchmark.py`）
-
-`model_size_mb()` 读取文件真实大小；`benchmark_onnx()` 用 ORT CPU EP 跑多次推理（预热后取中位数），得到真实的单图延迟。
+`vitquant/models/sam_loader.py`、`vitquant/quant/sam_convert.py`、`vitquant/quant/sam_calibrate.py`、`vitquant/eval/sam_evaluate.py` 组成一套与分类 ViT 并行的 SAM 研究流水线：只把 `SamModel.vision_encoder`（ViT backbone）转换成 FakeQuantize 版本，`prompt_encoder`/`mask_decoder` 保持 fp32。评估指标是**自一致性 IoU**——同一张图 + 同一个点提示下，fp32 模型和模拟量化模型预测的 mask 有多相似，而不是对标 COCO 之类的真值 mIoU（当前阶段的既定范围决策，非缺陷）。
 
 ## 5. 配置与脚本
 
@@ -114,64 +103,63 @@ dq = (q - zero_point) * scale
 
 - `deit_tiny.yaml`：开发机用的小模型配置
 - `vit_base.yaml`：服务器用的完整模型配置
-- `deit_tiny_w4a8.yaml`：W4A8 量化方案示例
+- `sam_vit_b.yaml`：SAM vision-encoder 量化配置
+- `deit_tiny_w4a8.yaml`：W4A8 量化方案示例，用于研究 4-bit 权重的精度代价（面向偏好 4-bit 权重的边缘 NPU）
 
-配置结构覆盖模型（架构名 + 本地权重路径）、数据（Imagenette 路径、批大小、是否自动下载）、量化方案、评估（`max_batches` 控制冒烟测试还是全量评估）、基准测试参数、设备、输出目录，以及可选的 `onnx` 段（`graph_optimization_level`、`quant_format`，用于规避特定硬件的兼容性问题）。
+配置结构覆盖模型（架构名 + 本地权重路径）、数据（Imagenette 路径、批大小、是否自动下载）、量化方案、评估（`max_batches` 控制冒烟测试还是全量评估）、设备、输出目录。不再有 `onnx`/`benchmark` 相关字段。
 
 ### 5.2 脚本（`scripts/`）
 
-- `quantize.py`：单次模拟量化实验（转换 → 校准 → 评估），输出 JSON
-- `evaluate.py`：评估 fp32 基线或指定 ONNX 文件
-- `run_all.py`：一键跑完整 6 阶段流水线——
+- `quantize.py`：单次模拟量化实验（转换 → 校准 → 评估），输出 `quantize_result.json`
+- `evaluate.py`：仅评估 fp32 基线
+- `qualitative.py`：fp32 vs 模拟量化的逐样本预测对比，标出被量化"翻转"的 top-1 预测，输出 `qualitative.json`/`.md` 和标注过的样本图 `qualitative_grid.png`
+- `run_all.py`：一键跑完整研究流水线——
   1. fp32 torch 基线
   2. 研究层模拟 INT8（转换 + 校准 + 评估）
-  3. 逐块敏感度扫描（可跳过）
-  4. 消融实验矩阵：默认方案 vs 权重逐张量 vs 激活对称 vs 不同 Observer（可跳过）
-  5. 交付层：ONNX 导出 + ORT 真实量化 + 精度评估 + 真实体积
-  6. 真实延迟基准
+  3. 逐块敏感度扫描（可跳过，`--skip-sensitivity`）
+  4. 消融实验矩阵：默认方案 vs 权重逐张量 vs 激活对称 vs 不同 Observer（可跳过，`--skip-ablation`）
 
-  产出 `results.json`（结构化数据）和 `report.md`（人类可读的 Markdown 报告，含精度对比表、体积压缩表、延迟加速表、敏感度排名表、消融矩阵表），并自动检测"模拟量化 vs ORT 真实量化"精度差距是否超过 1%，超过就在报告里标红警示。
+  产出 `results.json`（结构化数据）和 `report.md`（人类可读的 Markdown 报告，含精度对比表、**理论**体积压缩表——纯粹由位宽算出的算术比值、敏感度排名表、消融矩阵表）。
+- `quantize_sam.py`：SAM 研究流水线——模拟量化 vision encoder，评估 fp32 vs 量化 mask 的自一致性 IoU，产出 `results.json` 和 `report.md`（IoU 表 + 理论压缩表）
+- `qualitative_sam.py`：SAM 逐样本 mask 轮廓可视化（fp32 vs 模拟量化），按 IoU 从低到高排序，产出 `qualitative_sam_grid.png` 和 `qualitative_sam.json`
 
 ## 6. 离线权重与数据
 
-框架**从不主动下载模型权重**——`vitquant/models/loader.py::load_model()` 只用 `timm.create_model(pretrained=False)` 构建架构，再从本地 checkpoint 文件加载权重；权重文件不存在时抛出的 `FileNotFoundError` 里直接带着可复制粘贴的下载指令（在有网络的机器上用 `pretrained=True` 下载后 `torch.save`）。也兼容 `{"model": state_dict}` 这种带 wrapper 的 checkpoint 格式（如 facebookresearch/deit 官方发布格式）。
+框架**从不主动下载模型权重**——`vitquant/models/loader.py::load_model()` 只用 `timm.create_model(pretrained=False)` 构建架构，再从本地 checkpoint 文件加载权重；权重文件不存在时抛出的 `FileNotFoundError` 里直接带着可复制粘贴的下载指令（在有网络的机器上用 `pretrained=True` 下载后 `torch.save`）。也兼容 `{"model": state_dict}` 这种带 wrapper 的 checkpoint 格式（如 facebookresearch/deit 官方发布格式）。SAM 走同样的策略，但权重是 `save_pretrained` 产出的目录而非单个 `.pth` 文件（`vitquant/models/sam_loader.py`）。
 
 Imagenette 数据集（`vitquant/data/imagenette.py`）可以自动下载（约 100MB），也可以离线预先放好目录后跳过下载。`IMAGENETTE_TO_IMAGENET1K` 硬编码了 10 个 Imagenette 类别到 ImageNet-1k 类别索引的映射，让预训练模型无需微调即可直接评估。
 
-## 7. 实测结果（deit_tiny，真实预训练权重，Imagenette 全量验证集）
+## 7. 实测结果（真实预训练权重）
+
+### 7.1 deit_tiny，Imagenette 全量验证集
 
 | 项 | 数值 |
 |---|---|
 | FP32（PyTorch）top-1 / top-5 | 98.19% / 99.87% |
-| FP32（ONNX 导出后）top-1 / top-5 | 98.19% / 99.87%（与 PyTorch 完全一致） |
 | W8A8 模拟量化（研究层）top-1 / top-5 | 98.29% / 99.90% |
-| W8A8 真实 ORT 量化 top-1 / top-5 | 98.11% / 99.87% |
-| 模拟 vs 真实量化精度差距 | 0.18%（低于 1% 告警阈值，交叉验证通过） |
-| ONNX 体积压缩 | 23.0MB → 6.3MB，压缩比 3.63x |
+| top-1 变化 | 约 0%（相对 fp32 几乎无损，属噪声范围内的正向波动） |
+| 理论权重压缩比（W8，算术值） | 4.0x |
 
 逐块敏感度分析显示各 block 单独量化的精度影响都在 ±0.08% 以内（deit_tiny 对量化整体不敏感）；消融实验里"激活用 percentile observer"这个配置精度明显下降（96.74% vs 默认方案 98.29%），是几个消融变体里最差的一个。
 
-## 8. 服务器部署踩坑记录
+### 7.2 sam-vit-base，vision-encoder W8A8 模拟量化自一致性
 
-在把框架部署到用户的 Linux 服务器（AMD EPYC 云虚拟机）过程中，遇到并解决了以下问题：
+| 项 | 数值 |
+|---|---|
+| 模拟自一致性 mean IoU | 0.9287 |
+| 模拟自一致性 min IoU | 0.8803 |
+| 理论权重压缩比（W8，算术值） | 4.0x |
 
-1. **`ModuleNotFoundError: No module named 'vitquant'`**：新环境需要先 `pip install -e .`，框架代码本身没问题
-2. **macOS 上 Imagenette 下载 SSL 证书报错**：python.org 版 Python 需要显式指定 `SSL_CERT_FILE=$(python -m certifi)`
-3. **看起来"卡住没输出"**：根因是 Python 在非真实 tty 环境下对 stdout 使用全缓冲，进度打印全部堆积在缓冲区里。修复：强制 `sys.stdout.reconfigure(line_buffering=True)`，并加了细粒度的进度回调（`evaluate_torch`/`evaluate_onnx`/`calibrate`/`block_sensitivity` 都支持）
-4. **W4A8 请求下 `Illegal instruction (core dumped)` 崩溃**：ORT 的 int4 反量化 contrib 算子需要 AVX-512，该服务器 CPU 缺失。修复：加了 `_check_int4_cpu_support()` 前置检测，缺 AVX-512 时抛清晰的 `RuntimeError` 而不是让进程被内核裸杀
-5. **默认 W8A8 也崩溃，且是在 DataLoader worker 子进程里**：`num_workers>0` fork 出的子进程里 CPU 特征探测和主进程不一致，触发 SIGILL。修复：改用 `num_workers=0`
-6. **W8A8 单进程下依然崩溃，位置在 `ort.InferenceSession.run()`**：加了 `faulthandler.enable()` 抓到崩溃时的 Python 调用栈，配合一个隔离诊断脚本二分排查 ORT 的四种图优化级别，定位到 `ORT_ENABLE_EXTENDED`（及默认的 `ORT_ENABLE_ALL`）触发的**量化算子融合**产生了这台机器执行不了的 kernel；`ORT_ENABLE_BASIC` 不融合，侥幸没崩
-7. **发现"basic 不崩"只是因为它压根没有真正跑 int8 kernel**：BASIC 级别下 QDQ 图退化成"反量化回 fp32 算 → 再量化"，比纯 fp32 还慢（延迟从 fp32 的 14.28ms 变成 75.67ms）。尝试用 `QuantFormat.QOperator`（量化时直接把 int8 算子烤进图里，不依赖运行时融合）—— **同样在任意优化级别崩溃**，换了两个 onnxruntime 版本（1.27.0、1.24.1）结果一致
-8. **最终结论**：这台服务器的 CPU/虚拟化环境**在内核层面无法执行 ORT 的 int8 量化 kernel**，与图构造方式、优化级别、ORT 版本均无关，是硬件/虚拟化限制,非代码缺陷。已在 `report.md` 里加了自动检测：一旦发现使用了 `qdq + basic/disable` 这个规避组合，会在延迟表格下方自动追加警示，说明该延迟数字不代表真实硬件加速，只有精度和体积数字仍然有效
+这是**真实预训练权重**（`facebook/sam-vit-base`）上的实测结果，不是玩具模型——玩具/随机权重模型上这个指标会失真地接近 1.0，因此 0.9287/0.8803 才是有意义的参考值：说明 vision encoder 量化到 W8A8 后，绝大多数情况下预测的 mask 和 fp32 高度一致，但确实存在少数样本（min IoU 0.88）有可观察的差异，值得在后续换用真实 NPU 时重点复核。
 
-以上第 4-8 项的技术细节和结论都写进了 [README.md](README.md) 对应章节，方便未来在类似硬件上快速定位同类问题。
+## 8. 已知限制
 
-## 9. 已知限制
+- 所有精度/压缩数字都是**模拟/理论值**：模拟量化在数值上做量化-反量化后仍用 fp32 计算，因此精度评估是可信的，但不产生任何真实加速或真实磁盘体积变化——这是当前阶段的设计选择（NPU 预研阶段目标硬件未定，CPU 上的"真实"数字对最终 NPU 部署没有参考价值），不是尚待修复的缺陷
+- 真实延迟、真实压缩比、真实 kernel 行为要求实际的目标 NPU 及其工具链，目前不在本项目范围内；一旦确定了具体 NPU，需要单独的交付层适配该硬件的工具链（不是这个框架的职责）
+- SAM 的评估是自一致性 IoU，不是对标 COCO 之类标注集的真值 mIoU
+- SAM 仅量化 vision encoder，`prompt_encoder`/`mask_decoder` 保持 fp32
 
-- 交付层的 ONNX 精度/延迟评估固定用 CPU EP（这是刻意设计——int8 CPU 加速本身就是最有代表性的部署场景）；可选的 CUDA EP fp32 GPU 基线（spec 中提到的"可选"项）未实现
-- int4（W4A8）真实部署路径要求 x86-64 CPU 支持 AVX-512，且在虚拟化程度较高的云 CPU 上可能完全无法执行（见第 8 节）
-- 部分虚拟化云 CPU（如本项目实测的 AMD EPYC 实例）可能连标准 INT8 kernel 都无法执行，需要退化到"仅精度可信、延迟不可信"模式
+## 9. 如何运行
 
-## 10. 如何运行
-
-参见 [README.md](README.md)：环境搭建、权重获取、Imagenette 数据准备、`run_all.py` 使用方法均已说明。
+参见 [README.md](README.md)：环境搭建、权重获取、Imagenette 数据准备、各脚本用法均已说明。
+</content>

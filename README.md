@@ -1,13 +1,46 @@
 # ViTQuant
 
-ViT INT8 quantization framework with two layers:
+A simulated-quantization research framework for accuracy analysis and **NPU
+pre-research** — ViT image classification (timm) and SAM segmentation
+(HuggingFace `transformers`, vision-encoder-only). It is not a CPU-deployment
+tool: there is no ONNX export, no runtime, and no latency benchmark. The
+framework's only job is to answer "how much accuracy does a given
+quantization scheme cost?" before you commit to real hardware.
 
 - **Research layer** (`vitquant/quant/`): custom fake-quant kernel (pluggable
-  Observers, per-tensor/per-channel, symmetric/asymmetric) for accuracy analysis,
-  per-block sensitivity, and ablations. Simulated quantization — measures accuracy,
-  not speed.
-- **Delivery layer** (`vitquant/deploy/`): fp32 ONNX export + ONNX Runtime static
-  INT8 (QDQ). Real on-disk compression (~4x) and real CPU int8 latency.
+  Observers, per-tensor/per-channel, symmetric/asymmetric, any bit-width) for
+  accuracy analysis, per-block sensitivity, and quantization-scheme ablations.
+  Simulated quantization — numerically quantizes and dequantizes back to fp32
+  and runs fp32 compute, so it measures accuracy precisely but produces no
+  real speedup and no real on-disk compression.
+
+## Why simulation only (NPU pre-research)
+
+The actual deployment target for this project is an edge NPU, not a CPU. Real
+INT8 latency and real on-disk compression are meaningless numbers to chase
+right now: they depend on a specific NPU's runtime, kernels, and toolchain,
+none of which exist yet. What *is* transferable to any future target device:
+
+- **Accuracy retention** under a given quantization scheme (bit-width,
+  granularity, symmetry) vs the fp32 baseline.
+- **Per-block sensitivity** — which layers/blocks lose the most accuracy when
+  quantized, useful for deciding what to leave at higher precision on a real
+  target.
+- **Scheme ablation** — comparing observer types, symmetric vs asymmetric,
+  per-tensor vs per-channel, independent of any runtime.
+- **Theoretical compression** — the arithmetic ratio from bit-width alone
+  (e.g. int8 weights are 1/4 the size of fp32), which holds regardless of
+  target hardware.
+
+Real latency requires the actual target NPU, its SDK, and its kernels — none
+of that can be simulated meaningfully on a dev machine, so it's out of scope
+here. The framework's `QConfig` is pluggable specifically so that once an NPU
+is chosen, you can match its exact required scheme (per-tensor vs
+per-channel, symmetric vs asymmetric, bit-width) and get an accuracy read
+before touching the vendor toolchain. The W4A8 config
+(`configs/deit_tiny_w4a8.yaml`) exists for this reason: many edge NPUs prefer
+4-bit weights, so it's worth knowing the accuracy cost of dropping to 4-bit
+ahead of time.
 
 ## Setup
 
@@ -43,19 +76,25 @@ offline servers.
 python scripts/run_all.py --config configs/vit_base.yaml
 ```
 
-Outputs land in `outputs/<model>/`: `report.md` (accuracy / size / latency /
-sensitivity / ablation tables) and `results.json`.
+`run_all.py` runs the fp32 baseline, simulated INT8 accuracy, per-block
+sensitivity, and a quantization-scheme ablation matrix, and reports the
+theoretical weight compression ratio (arithmetic, from bit-width). Flags:
+`--skip-sensitivity`, `--skip-ablation`. Outputs land in `outputs/<model>/`:
+`report.md` (accuracy / theoretical-compression / sensitivity / ablation
+tables) and `results.json`.
 
-Single experiments: `scripts/quantize.py --config ...` (simulated INT8 only),
-`scripts/evaluate.py --config ... [--onnx path]`.
+Single experiments: `scripts/quantize.py --config ...` (one simulated INT8
+experiment: convert -> calibrate -> evaluate, writes `quantize_result.json`),
+`scripts/evaluate.py --config ...` (fp32 baseline only).
 
-Qualitative check: `scripts/qualitative.py --config ... [--num-samples N] [--onnx path]`
-runs fp32 vs quantized on real sample images and prints/saves per-image
-predictions and confidence, flagging cases where quantization actually flips
-the top-1 prediction — complements the aggregate accuracy tables with
-concrete examples. Writes `qualitative.json`/`.md` (tables) and
-`qualitative_grid.png` (the actual sample photos with predictions annotated,
-flipped cases sorted first and titled in red) to the config's `output_dir`.
+Qualitative check: `scripts/qualitative.py --config ... [--num-samples N]`
+runs fp32 vs simulated-quantized models on real sample images and
+prints/saves per-image predictions and confidence, flagging cases where
+quantization actually flips the top-1 prediction — complements the aggregate
+accuracy tables with concrete examples. Writes `qualitative.json`/`.md`
+(tables) and `qualitative_grid.png` (the actual sample photos with
+predictions annotated, flipped cases sorted first and titled in red) to the
+config's `output_dir`.
 
 ## Quantization schemes (W8A8, W4A8, ...)
 
@@ -67,48 +106,25 @@ quant:
   activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
 ```
 
-- **Research layer**: any bit-width works out of the box (fake-quant kernel is
-  generic over `bits`) — just edit the config and rerun.
-- **Delivery layer**: `weight_bits` of 8 or 4 are supported for real ORT export
-  (`configs/deit_tiny_w4a8.yaml` is a ready-made W4A8 example). Activation stays
-  8-bit (`QUInt8`, ORT's recommended x86-64 CPU EP type). W4 weights give a real,
-  larger on-disk compression (~6.5x vs ~3.6x for W8), but ORT's CPU EP has no
-  native int4 matmul kernel, so **W4A8 latency does not reflect a real hardware
-  speedup** — treat the accuracy and size numbers as the meaningful W4A8 result,
-  and the INT8 latency number as the real deployment speedup reference.
-
-  > **x86-64 CPUs without AVX-512**: ORT's int4 contrib kernel (`com.microsoft`
-  > domain) needs AVX-512 and otherwise crashes the process with `Illegal
-  > instruction (core dumped)` — an OS-level SIGILL, not a catchable Python
-  > error. `quantize_onnx(weight_bits=4)` now checks `/proc/cpuinfo` for
-  > `avx512f` on x86-64 Linux first and raises a clear `RuntimeError` instead.
-  > Apple Silicon (arm64) is unaffected and uses a different kernel path. If
-  > your server lacks AVX-512, use `weight_bits=8` for the real delivery
-  > layer — the research layer's simulated W4A8 accuracy numbers stay valid
-  > either way, since they never touch ORT.
+Any bit-width works out of the box — the fake-quant kernel is generic over
+`bits` — just edit the config and rerun. `configs/deit_tiny_w4a8.yaml` is a
+ready-made W4A8 example: it measures the accuracy cost of 4-bit weights
+(relevant for edge NPUs that prefer 4-bit weights), purely as a simulated
+accuracy number. There is no real W4A8 runtime path in this project.
 
 ## SAM: vision-encoder-only quantization (self-consistency IoU)
 
 Alongside the classification ViT pipeline above, this framework also quantizes
 the **image encoder (ViT backbone)** of Segment Anything (SAM), via
 HuggingFace `transformers.SamModel`. Only `model.vision_encoder` is converted
-to INT8 — `prompt_encoder` and `mask_decoder` stay fp32. Since SAM has no
-single "top-1 accuracy" metric, evaluation instead measures **self-consistency**:
-for the same image + point prompt, how similar are the fp32 model's predicted
-masks to the quantized model's predicted masks (IoU, per mask hypothesis)?
-High IoU means quantization didn't change what the model segments. This is
-**not** a ground-truth accuracy benchmark (e.g. mIoU against COCO) — that's a
-deliberate current-phase scope decision, not an oversight.
-
-Like the classification pipeline, SAM now has both layers:
-
-- **Research layer**: custom fake-quant kernel on the vision encoder,
-  simulated INT8 self-consistency IoU.
-- **Delivery layer** (`vitquant/deploy/`): real fp32 ONNX export of the
-  vision encoder + ONNX Runtime static INT8 (QDQ), real on-disk compression,
-  real CPU latency, and real (non-simulated) self-consistency IoU computed by
-  running the actual ORT INT8 graph and feeding its image embeddings into the
-  fp32 prompt_encoder/mask_decoder.
+to simulated INT8 — `prompt_encoder` and `mask_decoder` stay fp32. Since SAM
+has no single "top-1 accuracy" metric, evaluation instead measures
+**self-consistency**: for the same image + point prompt, how similar are the
+fp32 model's predicted masks to the simulated-quantized model's predicted
+masks (IoU, per mask hypothesis)? High IoU means quantization didn't change
+what the model segments. This is **not** a ground-truth accuracy benchmark
+(e.g. mIoU against COCO) — that's a deliberate scope decision, not an
+oversight.
 
 ### Weights (manual, offline)
 
@@ -131,77 +147,28 @@ Copy (or generate directly on the target machine) the resulting
 python scripts/quantize_sam.py --config configs/sam_vit_b.yaml
 ```
 
-This now runs both layers in one pass and writes to `outputs/sam_vit_b/`:
+Writes to `outputs/sam_vit_b/`:
 
-- `sam_consistency.json` — simulated (research-layer) IoU only, kept for
-  back-compat (`mean_iou`, `min_iou`, `per_sample_iou`).
-- `sam_vision_encoder.fp32.onnx` / `sam_vision_encoder.int8.onnx` — the real
-  ONNX export and its ORT-quantized INT8 counterpart.
-- `results.json` — everything: simulated IoU, real ORT IoU, real on-disk
-  size, real CPU latency.
-- `report.md` — a human-readable report (mirroring `run_all.py`'s report
-  style) with IoU / size / latency tables, printed to stdout at the end too.
+- `results.json` — model/device info, weight/activation bit-width, and
+  simulated self-consistency IoU (`mean_iou`, `min_iou`, `per_sample_iou`).
+- `report.md` — a human-readable report (IoU table + theoretical weight
+  compression table), printed to stdout at the end too.
+
+Qualitative check: `scripts/qualitative_sam.py --config ... [--num-samples N]`
+visualizes fp32 vs simulated-quantized predicted mask contours over the
+actual sample images (point prompt marked), sorted worst-agreement-first.
+Writes `qualitative_sam_grid.png` and `qualitative_sam.json`.
 
 ### Current scope boundaries
 
-These are deliberate staged decisions for this phase, not bugs — follow-ups
-for a future phase:
+These are deliberate staged decisions for this phase, not bugs:
 
 - **Only the vision encoder is quantized.** `mask_decoder` (and
-  `prompt_encoder`) are not touched and remain fp32 in both the simulated and
-  real delivery-layer pipelines.
+  `prompt_encoder`) are not touched and remain fp32.
 - **Evaluation is self-consistency only, not ground-truth mIoU** (e.g. against
-  COCO). The IoU numbers here (both simulated and real) measure agreement
-  between fp32 and quantized masks, not segmentation quality against a
-  labeled benchmark.
-
-## ORT graph-optimization crashes on some CPUs (cloud/virtualized x86-64)
-
-Confirmed on an AMD EPYC cloud VM (nested virtualization, no AVX-512): ORT's
-`sess.run()` on a **plain W8A8** quantized graph crashed with the same
-`Illegal instruction (core dumped)` SIGILL — not int4-specific after all.
-Bisected by trying each `onnxruntime.GraphOptimizationLevel` in turn:
-`ORT_DISABLE_ALL` and `ORT_ENABLE_BASIC` ran fine; `ORT_ENABLE_EXTENDED`
-(ORT's default is `ORT_ENABLE_ALL`, which includes everything `EXTENDED`
-does) crashed — ORT fuses the QuantizeLinear/DequantizeLinear pattern into a
-specialized kernel at that level, and that fused kernel is what crashes on
-this hardware.
-
-Every ORT session in the delivery layer (`evaluate_onnx`, `benchmark_onnx`)
-now goes through `vitquant/utils/ort_session.py::create_cpu_session`, which
-accepts an optional `graph_optimization_level`. Default is `None` (ORT's own
-default — fastest on healthy hardware, unchanged behavior). If you hit this
-crash, add to your config:
-
-```yaml
-onnx:
-  graph_optimization_level: basic   # disable | basic | extended | all
-```
-
-`scripts/run_all.py` and `scripts/evaluate.py --onnx` both read this key
-automatically. This trades a bit of ORT's fusion-based speed for stability;
-size/accuracy numbers are unaffected (optimization level only changes how
-the graph executes, not what it computes).
-
-**`graph_optimization_level: basic` gives back correctness but not speed**:
-with fusion disabled, the QDQ graph runs as dequantize→fp32-compute→requantize
-for every quantized op — full fp32 compute *plus* quantize/dequantize
-overhead, slower than plain fp32. We tried working around this with
-`QuantFormat.QOperator` (`onnx.quant_format: qoperator`), which bakes the
-quantized op directly into the graph at quantize time instead of relying on
-runtime fusion — **also confirmed to crash with the same SIGILL**, at every
-optimization level including `ORT_DISABLE_ALL`, and on two onnxruntime
-versions (1.27.0 and 1.24.1). This rules out a fusion-pass or
-version-specific bug: **on this class of hardware, ORT's int8 quantized
-kernel itself cannot execute at all**, regardless of how the graph reaches
-it. There is no further code-level workaround.
-
-Practical takeaway for affected hardware: use `quant_format: qdq` (default)
-with `graph_optimization_level: basic` — the only combination that doesn't
-crash. The report will show a latency number for this, but it does **not**
-reflect real int8 speed (it's the fp32-fallback path); `scripts/run_all.py`
-detects this configuration and adds a warning note to the report so it isn't
-mistaken for a real speedup. The accuracy and size/compression numbers remain
-valid — only the latency comparison is unusable on this hardware. Getting a
-genuine ORT CPU int8 speedup number requires different hardware (e.g. a
-non-virtualized/physical x86-64 machine, or a different cloud instance).
+  COCO). The IoU numbers here measure agreement between fp32 and
+  simulated-quantized masks, not segmentation quality against a labeled
+  benchmark.
+- **No real deployment path.** There is no ONNX export or runtime for SAM in
+  this project; all numbers are simulated/theoretical.
+</content>
