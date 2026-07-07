@@ -4,7 +4,7 @@ from torch import nn
 MASK_THRESHOLD = 0.0  # matches SAM's own binarization convention
 
 
-def _mask_iou(a: torch.Tensor, b: torch.Tensor) -> float:
+def mask_iou(a: torch.Tensor, b: torch.Tensor) -> float:
     """IoU between two boolean masks of the same shape. Both-empty -> 1.0
     (perfect agreement), not an undefined 0/0."""
     intersection = (a & b).sum().item()
@@ -39,7 +39,7 @@ def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
             "evaluate_sam_consistency assumes batch_size=1 and a single "
             "point-prompt-group per sample (matches build_sam_inputs)")
         num_masks = fp32_masks.shape[2]
-        ious = [_mask_iou(fp32_masks[0, 0, m], quant_masks[0, 0, m]) for m in range(num_masks)]
+        ious = [mask_iou(fp32_masks[0, 0, m], quant_masks[0, 0, m]) for m in range(num_masks)]
         per_sample.append(ious)
         all_ious.extend(ious)
 
