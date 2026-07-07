@@ -3,6 +3,7 @@
 ablation matrix, ORT real INT8 (accuracy + size + latency), markdown report."""
 import argparse
 import json
+import sys
 from dataclasses import replace
 from pathlib import Path
 
@@ -18,6 +19,11 @@ from vitquant.quant.convert import convert_vit
 from vitquant.quant.qconfig import QConfig, qconfig_from_dict
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
+
+# stdout is fully buffered (not line-buffered) unless attached to a real tty —
+# common under nohup/log redirection/some containers — so progress prints can
+# sit invisible until the process exits. Force line buffering unconditionally.
+sys.stdout.reconfigure(line_buffering=True)
 
 CLS = IMAGENETTE_TO_IMAGENET1K
 ACC_GAP_WARN = 0.01  # spec: flag if |simulated - ORT real| top-1 gap > 1%
@@ -80,7 +86,10 @@ def main() -> None:
                      "weight_bits": base_qc.weight.bits,
                      "activation_bits": base_qc.activation.bits}
 
+    print(f"Loading checkpoint {ckpt} ...")
     model, data_cfg = load_model(name, ckpt)
+    print(f"Preparing data under {d['root']} "
+         f"(downloading Imagenette if missing — can take a few minutes) ...")
     val = build_val_loader(d["root"], data_cfg, d["batch_size"], d["num_workers"], d["download"])
     calib = build_calib_loader(d["root"], data_cfg, d["calib_images"],
                                d["calib_batch_size"], d["num_workers"], d["download"])
