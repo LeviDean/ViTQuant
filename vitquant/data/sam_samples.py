@@ -25,5 +25,10 @@ def build_sam_inputs(root: str | Path, processor, num_samples: int = 8,
         w, h = img.size
         p = point if point is not None else (w // 2, h // 2)
         inputs = processor(images=img, input_points=[[list(p)]], return_tensors="pt")
+        # SamProcessor emits input_points as float64, which MPS can't run
+        # ops on (int64 sizes are fine there, only float64 is unsupported);
+        # float32 has ample precision for pixel coordinates.
+        inputs = {k: (v.float() if v.dtype == torch.float64 else v)
+                 for k, v in inputs.items()}
         samples.append(inputs)
     return samples
