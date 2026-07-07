@@ -48,3 +48,23 @@ sensitivity / ablation tables) and `results.json`.
 
 Single experiments: `scripts/quantize.py --config ...` (simulated INT8 only),
 `scripts/evaluate.py --config ... [--onnx path]`.
+
+## Quantization schemes (W8A8, W4A8, ...)
+
+Weight and activation bit-width are independent, set per config under `quant`:
+
+```yaml
+quant:
+  weight: {bits: 4, symmetric: true, per_channel: true, observer: minmax}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+```
+
+- **Research layer**: any bit-width works out of the box (fake-quant kernel is
+  generic over `bits`) — just edit the config and rerun.
+- **Delivery layer**: `weight_bits` of 8 or 4 are supported for real ORT export
+  (`configs/deit_tiny_w4a8.yaml` is a ready-made W4A8 example). Activation stays
+  8-bit (`QUInt8`, ORT's recommended x86-64 CPU EP type). W4 weights give a real,
+  larger on-disk compression (~6.5x vs ~3.6x for W8), but ORT's CPU EP has no
+  native int4 matmul kernel, so **W4A8 latency does not reflect a real hardware
+  speedup** — treat the accuracy and size numbers as the meaningful W4A8 result,
+  and the INT8 latency number as the real deployment speedup reference.
