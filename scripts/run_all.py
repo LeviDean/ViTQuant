@@ -14,6 +14,7 @@ from pathlib import Path
 from vitquant.data.imagenette import (IMAGENETTE_TO_IMAGENET1K, build_calib_loader,
                                       build_val_loader)
 from vitquant.eval.evaluate import block_sensitivity, evaluate_torch
+from vitquant.eval.qualitative import save_classification_qualitative
 from vitquant.models.loader import load_model
 from vitquant.quant.calibrate import calibrate
 from vitquant.quant.convert import convert_vit
@@ -72,6 +73,9 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--skip-sensitivity", action="store_true")
     ap.add_argument("--skip-ablation", action="store_true")
+    ap.add_argument("--no-qualitative", action="store_true",
+                    help="skip the per-image visualization grid")
+    ap.add_argument("--qualitative-samples", type=int, default=30)
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -97,31 +101,31 @@ def main() -> None:
     n_calib = len(calib)  # calibrate() has no max_batches limit in this pipeline
 
     # 1. fp32 torch baseline
-    print(f"[1/4] fp32 baseline on {device} ({n_val} batches)")
+    print(f"[1/5] fp32 baseline on {device} ({n_val} batches)")
     results["fp32_torch"] = evaluate_torch(model, val, CLS, device, max_b,
                                            progress=_progress("fp32", n_val))
 
     # 2. simulated INT8 (research layer)
-    print(f"[2/4] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
+    print(f"[2/5] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
     qmodel = convert_vit(model, base_qc)
     calibrate(qmodel, calib, device, progress=_calib_progress("calib", n_calib))
-    print(f"[2/4] simulated INT8: evaluating ({n_val} batches)")
+    print(f"[2/5] simulated INT8: evaluating ({n_val} batches)")
     results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
                                                progress=_progress("int8 sim", n_val))
 
     # 3. block sensitivity (len(groups)+1 full eval passes — can take a while)
     if not args.skip_sensitivity:
-        print("[3/4] per-block sensitivity sweep")
+        print("[3/5] per-block sensitivity sweep")
         results["sensitivity"] = block_sensitivity(
             qmodel, val, CLS, device, max_b,
             log=lambda msg: print(f"    [sensitivity] {msg}"))
     else:
-        print("[3/4] skipped")
+        print("[3/5] skipped")
 
     # 4. ablation matrix (each variant needs a fresh model: weights were shared in-place)
     if not args.skip_ablation:
         variants = ablation_qconfigs(base_qc)
-        print(f"[4/4] ablation matrix ({len(variants)} variants)")
+        print(f"[4/5] ablation matrix ({len(variants)} variants)")
         results["ablation"] = {}
         for i, (label, qc) in enumerate(variants.items(), 1):
             print(f"    variant {i}/{len(variants)}: {label}")
@@ -132,12 +136,25 @@ def main() -> None:
                 qm, val, CLS, device, max_b, progress=_progress(f"variant {i}", n_val))
             print(f"    {label}: top1={results['ablation'][label]['top1']:.4f}")
     else:
-        print("[4/4] skipped")
+        print("[4/5] skipped")
+
+    # 5. qualitative visualization examples (fresh fp32 model — convert_vit
+    # mutated the original in place at step 2; qmodel is the calibrated one)
+    if not args.no_qualitative:
+        print(f"[5/5] qualitative visualization ({args.qualitative_samples} samples)")
+        fp32_fresh, _ = load_model(name, ckpt)
+        grid = save_classification_qualitative(
+            fp32_fresh, qmodel, data_cfg, d["root"], args.qualitative_samples,
+            device, out, name, download=d["download"])
+        results["qualitative_grid"] = str(grid)
+    else:
+        print("[5/5] skipped")
 
     (out / "results.json").write_text(json.dumps(results, indent=2))
     report = build_report(results)
     (out / "report.md").write_text(report)
-    print(f"\nWrote {out / 'results.json'} and {out / 'report.md'}\n")
+    print(f"\nWrote {out / 'results.json'}, {out / 'report.md'}"
+         + (f", and {out / 'qualitative_grid.png'}" if not args.no_qualitative else "") + "\n")
     print(report)
 
 

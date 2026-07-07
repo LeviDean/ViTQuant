@@ -77,24 +77,23 @@ python scripts/run_all.py --config configs/vit_base.yaml
 ```
 
 `run_all.py` runs the fp32 baseline, simulated INT8 accuracy, per-block
-sensitivity, and a quantization-scheme ablation matrix, and reports the
-theoretical weight compression ratio (arithmetic, from bit-width). Flags:
-`--skip-sensitivity`, `--skip-ablation`. Outputs land in `outputs/<model>/`:
+sensitivity, a quantization-scheme ablation matrix, the theoretical weight
+compression ratio (arithmetic, from bit-width), AND a per-image visualization
+grid — one command gives you the metric report and the visual examples
+together. Flags: `--skip-sensitivity`, `--skip-ablation`, `--no-qualitative`,
+`--qualitative-samples N` (default 30). Outputs land in `outputs/<model>/`:
 `report.md` (accuracy / theoretical-compression / sensitivity / ablation
-tables) and `results.json`.
+tables), `results.json`, and `qualitative_grid.png` (the actual sample photos
+with fp32-vs-quantized predictions annotated, flipped cases sorted first and
+titled red) plus `qualitative.json`/`.md`.
 
 Single experiments: `scripts/quantize.py --config ...` (one simulated INT8
 experiment: convert -> calibrate -> evaluate, writes `quantize_result.json`),
 `scripts/evaluate.py --config ...` (fp32 baseline only).
 
-Qualitative check: `scripts/qualitative.py --config ... [--num-samples N]`
-runs fp32 vs simulated-quantized models on real sample images and
-prints/saves per-image predictions and confidence, flagging cases where
-quantization actually flips the top-1 prediction — complements the aggregate
-accuracy tables with concrete examples. Writes `qualitative.json`/`.md`
-(tables) and `qualitative_grid.png` (the actual sample photos with
-predictions annotated, flipped cases sorted first and titled in red) to the
-config's `output_dir`.
+Standalone visualization (already produced by `run_all.py`; use this to
+regenerate it on its own or with a different sample count):
+`scripts/qualitative.py --config ... [--num-samples N]`.
 
 ## Quantization schemes (W8A8, W4A8, ...)
 
@@ -147,17 +146,20 @@ Copy (or generate directly on the target machine) the resulting
 python scripts/quantize_sam.py --config configs/sam_vit_b.yaml
 ```
 
-Writes to `outputs/sam_vit_b/`:
+One command writes the metric report AND the visual examples to
+`outputs/sam_vit_b/`:
 
 - `results.json` — model/device info, weight/activation bit-width, and
   simulated self-consistency IoU (`mean_iou`, `min_iou`, `per_sample_iou`).
 - `report.md` — a human-readable report (IoU table + theoretical weight
   compression table), printed to stdout at the end too.
+- `qualitative_sam_grid.png` (+ `qualitative_sam.json`) — fp32 vs quantized
+  mask contours over the actual images (point prompt marked), sorted
+  worst-IoU-first, low-IoU cases titled red.
 
-Qualitative check: `scripts/qualitative_sam.py --config ... [--num-samples N]`
-visualizes fp32 vs simulated-quantized predicted mask contours over the
-actual sample images (point prompt marked), sorted worst-agreement-first.
-Writes `qualitative_sam_grid.png` and `qualitative_sam.json`.
+Flags: `--no-qualitative`, `--qualitative-samples N` (default 8). The
+standalone `scripts/qualitative_sam.py --config ... [--num-samples N]`
+regenerates just the grid.
 
 ### Current scope boundaries
 

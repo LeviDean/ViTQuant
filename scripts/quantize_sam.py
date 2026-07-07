@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from vitquant.data.sam_samples import build_sam_inputs
+from vitquant.eval.qualitative import save_sam_qualitative
 from vitquant.eval.sam_evaluate import evaluate_sam_consistency
 from vitquant.models.sam_loader import load_sam_model
 from vitquant.quant.qconfig import qconfig_from_dict
@@ -62,6 +63,9 @@ def build_report(r: dict) -> str:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
+    ap.add_argument("--no-qualitative", action="store_true",
+                    help="skip the per-image mask visualization grid")
+    ap.add_argument("--qualitative-samples", type=int, default=8)
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -98,10 +102,21 @@ def main() -> None:
         "activation_bits": base_qc.activation.bits,
         "iou_simulated": sim_result,
     }
+
+    # Qualitative visualization examples (mask contour overlays)
+    if not args.no_qualitative:
+        print(f"\nGenerating qualitative mask visualization "
+             f"({args.qualitative_samples} samples) ...")
+        grid = save_sam_qualitative(
+            fp32_model, quant_model, processor, d["root"], args.qualitative_samples,
+            device, out, cfg["model"]["name"], download=d["download"])
+        results["qualitative_grid"] = str(grid)
+
     (out / "results.json").write_text(json.dumps(results, indent=2))
     report = build_report(results)
     (out / "report.md").write_text(report)
-    print(f"\nWrote {out / 'results.json'} and {out / 'report.md'}\n")
+    tail = f", and {out / 'qualitative_sam_grid.png'}" if not args.no_qualitative else ""
+    print(f"\nWrote {out / 'results.json'}, {out / 'report.md'}{tail}\n")
     print(report)
 
 
