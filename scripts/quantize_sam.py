@@ -160,7 +160,10 @@ def main() -> None:
     print(f"fp32: {size_mb['fp32']:.2f} MB, int8: {size_mb['int8']:.2f} MB, "
          f"compression: {size_mb['fp32'] / size_mb['int8']:.2f}x")
 
-    print(f"Benchmarking real CPU latency (runs={bench_runs}, warmup={bench_warmup}) ...")
+    print(f"Benchmarking real CPU latency (runs={bench_runs}, warmup={bench_warmup}, "
+         f"img_size={img_size}) ... SAM's full 1024x1024 input makes this much "
+         f"heavier than the classification pipeline's 224x224 — can take a few "
+         f"minutes on CPU.")
     latency_ms = {
         "fp32": benchmark_onnx(fp32_onnx, bench_runs, bench_warmup,
                                img_size=img_size, graph_optimization_level=ort_opt),
