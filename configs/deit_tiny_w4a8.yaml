@@ -1,7 +1,7 @@
-# W4A8 variant: 4-bit weights, 8-bit activations. Simulated accuracy is fully
-# real (custom kernel); the real-deployment ORT delivery still exports/quantizes
-# W4A8 for real size numbers, but ORT's CPU EP has no int4 matmul kernel, so the
-# latency numbers do not reflect a real hardware speedup (see report note).
+# W4A8 variant: 4-bit weights, 8-bit activations. Measures the accuracy cost of
+# dropping weights to 4-bit (relevant for edge NPUs that prefer 4-bit weights).
+# The custom fake-quant kernel handles any bit-width, so this is a config-only
+# change from the W8A8 default.
 model:
   name: deit_tiny_patch16_224
   checkpoint: weights/deit_tiny_patch16_224.pth
@@ -20,10 +20,6 @@ quant:
 
 eval:
   max_batches: null
-
-benchmark:
-  runs: 50
-  warmup: 10
 
 device: auto
 output_dir: outputs/deit_tiny_w4a8

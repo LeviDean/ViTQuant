@@ -1,7 +1,7 @@
 [project]
 name = "vitquant"
 version = "0.1.0"
-description = "ViT INT8 quantization framework: simulated quant research kernel + ONNX Runtime delivery"
+description = "ViT/SAM simulated-quantization research framework for accuracy analysis and NPU pre-research"
 requires-python = ">=3.10"
 dependencies = [
     "torch",
@@ -9,8 +9,6 @@ dependencies = [
     # QuantAttention mirrors timm's internal Attention (resolve_self_attn_mask);
     # keep the range narrow and re-verify on bump.
     "timm>=1.0.27,<1.1",
-    "onnx",
-    "onnxruntime",
     "pyyaml",
     "numpy",
     "matplotlib",

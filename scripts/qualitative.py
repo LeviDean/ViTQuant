@@ -43,19 +43,10 @@ def _denormalize(x: torch.Tensor, mean: tuple, std: tuple):
     return img.clamp(0, 1).permute(1, 2, 0).numpy()
 
 
-def _predict_onnx(sess, x: torch.Tensor) -> tuple[int, float]:
-    out = sess.run(None, {"input": x.numpy()})[0]
-    probs = F.softmax(torch.from_numpy(out)[:, CLS], dim=1)[0]
-    top1 = int(probs.argmax())
-    return top1, float(probs[top1])
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
     ap.add_argument("--num-samples", type=int, default=30)
-    ap.add_argument("--onnx", default=None,
-                    help="also compare against this real ORT-quantized ONNX model")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -71,11 +62,6 @@ def main() -> None:
     qmodel = convert_vit(qmodel, qconfig_from_dict(cfg["quant"]))
     calibrate(qmodel, calib, device)
     qmodel = qmodel.eval()
-
-    ort_sess = None
-    if args.onnx:
-        import onnxruntime as ort
-        ort_sess = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
 
     samples = build_sample_loader(d["root"], data_cfg, args.num_samples)
     mean, std = data_cfg["mean"], data_cfg["std"]
@@ -96,14 +82,6 @@ def main() -> None:
             "int8_sim_correct": int8_top1 == true_idx,
             "sim_prediction_changed": fp32_top1 != int8_top1,
         }
-        if ort_sess is not None:
-            ort_top1, ort_conf = _predict_onnx(ort_sess, x)
-            row.update({
-                "int8_real_pred": IMAGENETTE_CLASS_NAMES[ort_top1],
-                "int8_real_conf": ort_conf,
-                "int8_real_correct": ort_top1 == true_idx,
-                "real_prediction_changed": fp32_top1 != ort_top1,
-            })
         rows.append(row)
         images.append(_denormalize(x, mean, std))
         flag = " <-- prediction changed" if row["sim_prediction_changed"] else ""
@@ -130,11 +108,7 @@ def main() -> None:
 
 
 def _build_markdown(rows: list[dict], model_name: str) -> str:
-    has_real = bool(rows) and "int8_real_pred" in rows[0]
-    headers = ["#", "True", "FP32 pred (conf)", "INT8-sim pred (conf)"]
-    if has_real:
-        headers.append("INT8-real pred (conf)")
-    headers.append("Changed?")
+    headers = ["#", "True", "FP32 pred (conf)", "INT8-sim pred (conf)", "Changed?"]
 
     changed = [r for r in rows if r["sim_prediction_changed"]]
     unchanged = [r for r in rows if not r["sim_prediction_changed"]]
@@ -148,10 +122,8 @@ def _build_markdown(rows: list[dict], model_name: str) -> str:
     for r in changed + unchanged:
         cells = [str(r["index"]), r["true"],
                  f"{r['fp32_pred']} ({r['fp32_conf']:.2f})",
-                 f"{r['int8_sim_pred']} ({r['int8_sim_conf']:.2f})"]
-        if has_real:
-            cells.append(f"{r['int8_real_pred']} ({r['int8_real_conf']:.2f})")
-        cells.append("YES" if r["sim_prediction_changed"] else "")
+                 f"{r['int8_sim_pred']} ({r['int8_sim_conf']:.2f})",
+                 "YES" if r["sim_prediction_changed"] else ""]
         lines.append("| " + " | ".join(cells) + " |")
 
     n = len(rows)

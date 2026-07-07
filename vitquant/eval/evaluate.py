@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Callable, Optional
 
 import torch
@@ -7,7 +6,6 @@ from torch.utils.data import DataLoader
 
 from vitquant.eval.metrics import AccuracyMeter
 from vitquant.quant.fake_quant import FakeQuantize, set_quantizing
-from vitquant.utils.ort_session import create_cpu_session
 
 ProgressFn = Callable[[int, int], None]  # progress(batch_index, total_batches)
 
@@ -31,23 +29,6 @@ def evaluate_torch(model: nn.Module, loader: DataLoader, class_indices: list[int
             break
         logits = model(x.to(device))[:, class_indices]
         meter.update(logits.cpu(), y)
-        if progress is not None:
-            progress(i, total)
-    return {"top1": meter.top1, "top5": meter.top5}
-
-
-def evaluate_onnx(onnx_path: str | Path, loader: DataLoader,
-                  class_indices: list[int], max_batches: Optional[int] = None,
-                  progress: Optional[ProgressFn] = None,
-                  graph_optimization_level: Optional[str] = None) -> dict:
-    sess = create_cpu_session(onnx_path, graph_optimization_level)
-    meter = AccuracyMeter()
-    total = _num_batches(loader, max_batches)
-    for i, (x, y) in enumerate(loader):
-        if max_batches is not None and i >= max_batches:
-            break
-        out = sess.run(None, {"input": x.numpy()})[0]
-        meter.update(torch.from_numpy(out)[:, class_indices], y)
         if progress is not None:
             progress(i, total)
     return {"top1": meter.top1, "top5": meter.top5}

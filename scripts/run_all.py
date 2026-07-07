@@ -1,8 +1,11 @@
 #!/usr/bin/env python
-"""One-command full evaluation: fp32 baseline, simulated INT8, block sensitivity,
-ablation matrix, ORT real INT8 (accuracy + size + latency), markdown report."""
+"""One-command research-layer evaluation: fp32 baseline, simulated INT8
+(fake-quant) accuracy, per-block sensitivity, and a quantization-scheme
+ablation matrix, plus a markdown report. Simulated quantization measures the
+accuracy impact of a scheme (device-independent); it does not run a real int8
+kernel. The theoretical compression ratio is reported from the weight
+bit-width (int8 weights are 1/4 of fp32)."""
 import argparse
-import faulthandler
 import json
 import sys
 from dataclasses import replace
@@ -10,10 +13,7 @@ from pathlib import Path
 
 from vitquant.data.imagenette import (IMAGENETTE_TO_IMAGENET1K, build_calib_loader,
                                       build_val_loader)
-from vitquant.deploy.benchmark import benchmark_onnx, model_size_mb
-from vitquant.deploy.export_onnx import export_fp32_onnx
-from vitquant.deploy.quantize_ort import quantize_onnx
-from vitquant.eval.evaluate import block_sensitivity, evaluate_onnx, evaluate_torch
+from vitquant.eval.evaluate import block_sensitivity, evaluate_torch
 from vitquant.models.loader import load_model
 from vitquant.quant.calibrate import calibrate
 from vitquant.quant.convert import convert_vit
@@ -26,14 +26,7 @@ from vitquant.utils.device import resolve_device
 # sit invisible until the process exits. Force line buffering unconditionally.
 sys.stdout.reconfigure(line_buffering=True)
 
-# Native crashes (e.g. SIGILL from an unsupported CPU instruction in a C
-# extension) kill the process with no Python traceback and no dmesg access in
-# many containers. faulthandler installs its own handler for exactly this: it
-# prints the Python-level stack (which call was in flight) before dying.
-faulthandler.enable()
-
 CLS = IMAGENETTE_TO_IMAGENET1K
-ACC_GAP_WARN = 0.01  # spec: flag if |simulated - ORT real| top-1 gap > 1%
 
 
 def ablation_qconfigs(base: QConfig) -> dict[str, QConfig]:
@@ -59,7 +52,7 @@ def pct(x: float) -> str:
 
 def _progress(label: str, total: int) -> callable:
     """Print a status line every ~20% of batches, so long eval passes don't
-    look hung on a server terminal. Matches evaluate_torch/onnx's progress(i, n)."""
+    look hung on a server terminal. Matches evaluate_torch's progress(i, n)."""
     step = max(1, total // 5)
 
     def cb(i: int, n: int) -> None:
@@ -89,16 +82,9 @@ def main() -> None:
     out = Path(cfg["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
     base_qc = qconfig_from_dict(cfg["quant"])
-    # Optional escape hatch: some CPUs crash (SIGILL) when ORT fuses quantized
-    # ops at its default optimization level — see vitquant/utils/ort_session.py.
-    onnx_cfg = cfg.get("onnx", {})
-    ort_opt = onnx_cfg.get("graph_optimization_level")
-    ort_quant_format = onnx_cfg.get("quant_format", "qdq")
     results: dict = {"model": name, "device": str(device),
                      "weight_bits": base_qc.weight.bits,
-                     "activation_bits": base_qc.activation.bits,
-                     "onnx_quant_format": ort_quant_format,
-                     "onnx_graph_optimization_level": ort_opt}
+                     "activation_bits": base_qc.activation.bits}
 
     print(f"Loading checkpoint {ckpt} ...")
     model, data_cfg = load_model(name, ckpt)
@@ -111,31 +97,31 @@ def main() -> None:
     n_calib = len(calib)  # calibrate() has no max_batches limit in this pipeline
 
     # 1. fp32 torch baseline
-    print(f"[1/6] fp32 baseline on {device} ({n_val} batches)")
+    print(f"[1/4] fp32 baseline on {device} ({n_val} batches)")
     results["fp32_torch"] = evaluate_torch(model, val, CLS, device, max_b,
                                            progress=_progress("fp32", n_val))
 
     # 2. simulated INT8 (research layer)
-    print(f"[2/6] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
+    print(f"[2/4] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
     qmodel = convert_vit(model, base_qc)
     calibrate(qmodel, calib, device, progress=_calib_progress("calib", n_calib))
-    print(f"[2/6] simulated INT8: evaluating ({n_val} batches)")
+    print(f"[2/4] simulated INT8: evaluating ({n_val} batches)")
     results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
                                                progress=_progress("int8 sim", n_val))
 
     # 3. block sensitivity (len(groups)+1 full eval passes — can take a while)
     if not args.skip_sensitivity:
-        print("[3/6] per-block sensitivity sweep")
+        print("[3/4] per-block sensitivity sweep")
         results["sensitivity"] = block_sensitivity(
             qmodel, val, CLS, device, max_b,
             log=lambda msg: print(f"    [sensitivity] {msg}"))
     else:
-        print("[3/6] skipped")
+        print("[3/4] skipped")
 
     # 4. ablation matrix (each variant needs a fresh model: weights were shared in-place)
     if not args.skip_ablation:
         variants = ablation_qconfigs(base_qc)
-        print(f"[4/6] ablation matrix ({len(variants)} variants)")
+        print(f"[4/4] ablation matrix ({len(variants)} variants)")
         results["ablation"] = {}
         for i, (label, qc) in enumerate(variants.items(), 1):
             print(f"    variant {i}/{len(variants)}: {label}")
@@ -146,95 +132,37 @@ def main() -> None:
                 qm, val, CLS, device, max_b, progress=_progress(f"variant {i}", n_val))
             print(f"    {label}: top1={results['ablation'][label]['top1']:.4f}")
     else:
-        print("[4/6] skipped")
-
-    # 5. delivery layer: ONNX export + ORT real INT8
-    print("[5/6] ONNX export + ORT static INT8 (export/quantize give no progress "
-         "signal — ORT internal, may take a few minutes on larger models)")
-    fp32_model, _ = load_model(name, ckpt)  # fresh fp32 weights for export
-    fp32_onnx = export_fp32_onnx(fp32_model, out / f"{name}.fp32.onnx")
-    int8_onnx = quantize_onnx(fp32_onnx, out / f"{name}.int8.onnx", calib,
-                              weight_bits=base_qc.weight.bits,
-                              quant_format=ort_quant_format)
-    results["fp32_onnx"] = evaluate_onnx(fp32_onnx, val, CLS, max_b,
-                                         progress=_progress("fp32 onnx", n_val),
-                                         graph_optimization_level=ort_opt)
-    results["int8_onnx"] = evaluate_onnx(int8_onnx, val, CLS, max_b,
-                                         progress=_progress("int8 onnx", n_val),
-                                         graph_optimization_level=ort_opt)
-    results["size_mb"] = {"fp32": model_size_mb(fp32_onnx), "int8": model_size_mb(int8_onnx)}
-
-    # 6. latency benchmark (CPU EP — the representative int8 speedup metric)
-    print("[6/6] latency benchmark (ORT CPU EP)")
-    b = cfg["benchmark"]
-    results["latency_ms"] = {
-        "fp32": benchmark_onnx(fp32_onnx, b["runs"], b["warmup"],
-                               graph_optimization_level=ort_opt),
-        "int8": benchmark_onnx(int8_onnx, b["runs"], b["warmup"],
-                               graph_optimization_level=ort_opt),
-    }
+        print("[4/4] skipped")
 
     (out / "results.json").write_text(json.dumps(results, indent=2))
-    report = build_report(results, args)
+    report = build_report(results)
     (out / "report.md").write_text(report)
     print(f"\nWrote {out / 'results.json'} and {out / 'report.md'}\n")
     print(report)
 
 
-def build_report(r: dict, args) -> str:
+def build_report(r: dict) -> str:
     fp32_t, int8_s = r["fp32_torch"], r["int8_simulated"]
-    fp32_o, int8_o = r["fp32_onnx"], r["int8_onnx"]
-    sz, lat = r["size_mb"], r["latency_ms"]
     wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
     scheme = f"W{wbits}A{abits}"
-    onnx_format = r.get("onnx_quant_format", "qdq").upper()
 
     acc_rows = [
         ["FP32 (PyTorch)", pct(fp32_t["top1"]), pct(fp32_t["top5"]), "-"],
-        ["FP32 (ONNX)", pct(fp32_o["top1"]), pct(fp32_o["top5"]),
-         pct(fp32_t["top1"] - fp32_o["top1"])],
         [f"{scheme} simulated (custom kernel)", pct(int8_s["top1"]), pct(int8_s["top5"]),
          pct(fp32_t["top1"] - int8_s["top1"])],
-        [f"{scheme} real (ORT {onnx_format})", pct(int8_o["top1"]), pct(int8_o["top5"]),
-         pct(fp32_t["top1"] - int8_o["top1"])],
     ]
     parts = [f"# Quantization Report: {r['model']} ({scheme})",
-             f"\nDevice (torch eval): `{r['device']}`\n",
+             f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) accuracy — "
+             f"device-independent, no real int8 kernel run.\n",
              "## Accuracy\n",
              md_table(["Variant", "Top-1", "Top-5", "Top-1 drop vs FP32"], acc_rows)]
 
-    gap = abs(int8_s["top1"] - int8_o["top1"])
-    if gap > ACC_GAP_WARN:
-        parts.append(f"\n> **WARNING**: simulated vs ORT-real top-1 gap {pct(gap)} "
-                     f"exceeds {pct(ACC_GAP_WARN)} — investigate qscheme mismatch.")
-    else:
-        parts.append(f"\nSimulated vs ORT-real top-1 gap: {pct(gap)} (cross-validation OK)")
-
-    parts.append(f"\n## Real Model Size (ONNX on disk, {scheme})\n")
-    parts.append(md_table(["Variant", "Size (MB)", "Compression"], [
-        ["FP32", f"{sz['fp32']:.1f}", "1.0x"],
-        [scheme, f"{sz['int8']:.1f}", f"{sz['fp32'] / sz['int8']:.2f}x"]]))
-
-    parts.append(f"\n## Real Latency (ORT CPU EP, batch=1, median, {scheme})\n")
-    parts.append(md_table(["Variant", "Latency (ms)", "Speedup"], [
-        ["FP32", f"{lat['fp32']:.2f}", "1.0x"],
-        [scheme, f"{lat['int8']:.2f}", f"{lat['fp32'] / lat['int8']:.2f}x"]]))
-    opt_level = r.get("onnx_graph_optimization_level")
-    if onnx_format == "QDQ" and opt_level in ("basic", "disable"):
-        parts.append(
-            f"\n> **Note**: `onnx.graph_optimization_level: {opt_level}` is set "
-            f"(likely a workaround for an ORT crash on this CPU — see README). "
-            f"At this level ORT does not fuse QDQ into a real int8 kernel: the "
-            f"graph runs dequantize→fp32-compute→requantize for every "
-            f"quantized op, so the {scheme} latency above reflects fp32 compute "
-            f"plus quantize/dequantize overhead, not real int8 hardware speed. "
-            f"Treat only the accuracy and size/compression numbers above as "
-            f"valid delivery-layer results on this machine.")
-    if wbits < 8:
-        parts.append(f"\n> Note: ORT's CPU EP has no native INT{wbits} matmul kernel — "
-                     f"the {scheme} latency above reflects the QDQ-graph overhead of "
-                     f"dequantizing on the fly, not a real hardware speedup. Treat the "
-                     f"size/compression numbers as the meaningful {scheme} result.")
+    # Theoretical weight compression (arithmetic from bit-width): int8 weights
+    # are 8/32 = 1/4 of fp32; W4 is 4/32 = 1/8. Activations aren't stored.
+    ratio = 32 / wbits
+    parts.append(f"\n## Theoretical Weight Compression\n")
+    parts.append(md_table(["Scheme", "Weight bits", "Compression vs FP32"], [
+        [scheme, str(wbits), f"{ratio:.1f}x"]]))
 
     if "sensitivity" in r:
         parts.append("\n## Per-Block Sensitivity (top-1 drop when only that block is quantized)\n")

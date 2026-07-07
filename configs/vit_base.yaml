@@ -18,9 +18,5 @@ quant:
 eval:
   max_batches: null
 
-benchmark:
-  runs: 50
-  warmup: 10
-
 device: auto
 output_dir: outputs/vit_base
