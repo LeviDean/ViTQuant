@@ -100,6 +100,16 @@ High IoU means quantization didn't change what the model segments. This is
 **not** a ground-truth accuracy benchmark (e.g. mIoU against COCO) — that's a
 deliberate current-phase scope decision, not an oversight.
 
+Like the classification pipeline, SAM now has both layers:
+
+- **Research layer**: custom fake-quant kernel on the vision encoder,
+  simulated INT8 self-consistency IoU.
+- **Delivery layer** (`vitquant/deploy/`): real fp32 ONNX export of the
+  vision encoder + ONNX Runtime static INT8 (QDQ), real on-disk compression,
+  real CPU latency, and real (non-simulated) self-consistency IoU computed by
+  running the actual ORT INT8 graph and feeding its image embeddings into the
+  fp32 prompt_encoder/mask_decoder.
+
 ### Weights (manual, offline)
 
 Same "never downloads" policy as the classification models, but a SAM/HF
@@ -121,8 +131,16 @@ Copy (or generate directly on the target machine) the resulting
 python scripts/quantize_sam.py --config configs/sam_vit_b.yaml
 ```
 
-Output: `outputs/sam_vit_b/sam_consistency.json` with `mean_iou`, `min_iou`,
-and `per_sample_iou` (per-sample, per-mask-hypothesis IoU values).
+This now runs both layers in one pass and writes to `outputs/sam_vit_b/`:
+
+- `sam_consistency.json` — simulated (research-layer) IoU only, kept for
+  back-compat (`mean_iou`, `min_iou`, `per_sample_iou`).
+- `sam_vision_encoder.fp32.onnx` / `sam_vision_encoder.int8.onnx` — the real
+  ONNX export and its ORT-quantized INT8 counterpart.
+- `results.json` — everything: simulated IoU, real ORT IoU, real on-disk
+  size, real CPU latency.
+- `report.md` — a human-readable report (mirroring `run_all.py`'s report
+  style) with IoU / size / latency tables, printed to stdout at the end too.
 
 ### Current scope boundaries
 
@@ -130,13 +148,12 @@ These are deliberate staged decisions for this phase, not bugs — follow-ups
 for a future phase:
 
 - **Only the vision encoder is quantized.** `mask_decoder` (and
-  `prompt_encoder`) are not touched and remain fp32.
-- **No ONNX export / real ORT delivery layer for SAM yet.** The classification
-  ViT pipeline has a delivery layer (`vitquant/deploy/`, real on-disk
-  compression + real CPU int8 latency); SAM does not yet.
+  `prompt_encoder`) are not touched and remain fp32 in both the simulated and
+  real delivery-layer pipelines.
 - **Evaluation is self-consistency only, not ground-truth mIoU** (e.g. against
-  COCO). The IoU numbers here measure agreement between fp32 and quantized
-  masks, not segmentation quality against a labeled benchmark.
+  COCO). The IoU numbers here (both simulated and real) measure agreement
+  between fp32 and quantized masks, not segmentation quality against a
+  labeled benchmark.
 
 ## ORT graph-optimization crashes on some CPUs (cloud/virtualized x86-64)
 
