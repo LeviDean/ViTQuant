@@ -78,7 +78,13 @@ dq = (q - zero_point) * scale
 
 ### 2.6 校准（`vitquant/quant/calibrate.py`）
 
-`calibrate()` 驱动完整的 观察 → 冻结 → 量化 生命周期：把校准集喂给模型收集统计量，然后冻结 qparams，最后把所有 FakeQuantize 切到量化模式。
+`calibrate()` 驱动完整的 观察 → 冻结 → 量化 生命周期，但把**权重标定**和**激活标定**解耦：
+
+1. **权重标定（数据无关）**：`calibrate_weights()` 先对每个权重量化器直接从权重张量观测一次、算出 qparams 并冻结——权重是静态的，其 scale/zero_point 只取决于权重本身，不需要任何校准数据。
+2. **激活标定（数据相关）**：再把校准集喂给模型，此时只有尚未冻结的激活量化器收集统计量（`set_observing` 会跳过已冻结的权重量化器）。前向仍以 fp32 权重计算，与标准 PTQ 一致，激活范围与"权重每 batch 重复观测"的旧写法逐位相同。
+3. **切换量化**：冻结激活 qparams，最后 `set_quantizing()` 把所有 FakeQuantize（权重+激活）切到量化模式。
+
+`freeze()` 只负责"从 observer 算出 qparams"，不再顺带打开量化开关，"是否应用量化"由 `set_quantizing()` 独立控制——这样 `block_sensitivity` 才能在校准完成后逐块开关量化，也为后续研究（逐权重张量的 MSE 最优 scale 搜索、权重/激活各自独立的标定策略等）留出干净的接口。
 
 ## 3. 评估体系（`vitquant/eval/`）
 
