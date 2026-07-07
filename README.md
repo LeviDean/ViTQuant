@@ -53,7 +53,9 @@ Qualitative check: `scripts/qualitative.py --config ... [--num-samples N] [--onn
 runs fp32 vs quantized on real sample images and prints/saves per-image
 predictions and confidence, flagging cases where quantization actually flips
 the top-1 prediction — complements the aggregate accuracy tables with
-concrete examples.
+concrete examples. Writes `qualitative.json`/`.md` (tables) and
+`qualitative_grid.png` (the actual sample photos with predictions annotated,
+flipped cases sorted first and titled in red) to the config's `output_dir`.
 
 ## Quantization schemes (W8A8, W4A8, ...)
 
