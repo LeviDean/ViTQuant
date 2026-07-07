@@ -49,6 +49,12 @@ sensitivity / ablation tables) and `results.json`.
 Single experiments: `scripts/quantize.py --config ...` (simulated INT8 only),
 `scripts/evaluate.py --config ... [--onnx path]`.
 
+Qualitative check: `scripts/qualitative.py --config ... [--num-samples N] [--onnx path]`
+runs fp32 vs quantized on real sample images and prints/saves per-image
+predictions and confidence, flagging cases where quantization actually flips
+the top-1 prediction — complements the aggregate accuracy tables with
+concrete examples.
+
 ## Quantization schemes (W8A8, W4A8, ...)
 
 Weight and activation bit-width are independent, set per config under `quant`:
