@@ -1,8 +1,11 @@
 import statistics
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
+
+from vitquant.utils.ort_session import create_cpu_session
 
 
 def model_size_mb(path: str | Path) -> float:
@@ -10,10 +13,10 @@ def model_size_mb(path: str | Path) -> float:
 
 
 def benchmark_onnx(path: str | Path, runs: int = 50, warmup: int = 10,
-                   img_size: int = 224) -> float:
+                   img_size: int = 224,
+                   graph_optimization_level: Optional[str] = None) -> float:
     """Median single-image CPU latency in milliseconds."""
-    import onnxruntime as ort
-    sess = ort.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    sess = create_cpu_session(path, graph_optimization_level)
     x = np.random.rand(1, 3, img_size, img_size).astype(np.float32)
     feed = {"input": x}
     for _ in range(warmup):

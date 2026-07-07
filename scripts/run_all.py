@@ -89,6 +89,9 @@ def main() -> None:
     out = Path(cfg["output_dir"])
     out.mkdir(parents=True, exist_ok=True)
     base_qc = qconfig_from_dict(cfg["quant"])
+    # Optional escape hatch: some CPUs crash (SIGILL) when ORT fuses quantized
+    # ops at its default optimization level — see vitquant/utils/ort_session.py.
+    ort_opt = cfg.get("onnx", {}).get("graph_optimization_level")
     results: dict = {"model": name, "device": str(device),
                      "weight_bits": base_qc.weight.bits,
                      "activation_bits": base_qc.activation.bits}
@@ -149,17 +152,21 @@ def main() -> None:
     int8_onnx = quantize_onnx(fp32_onnx, out / f"{name}.int8.onnx", calib,
                               weight_bits=base_qc.weight.bits)
     results["fp32_onnx"] = evaluate_onnx(fp32_onnx, val, CLS, max_b,
-                                         progress=_progress("fp32 onnx", n_val))
+                                         progress=_progress("fp32 onnx", n_val),
+                                         graph_optimization_level=ort_opt)
     results["int8_onnx"] = evaluate_onnx(int8_onnx, val, CLS, max_b,
-                                         progress=_progress("int8 onnx", n_val))
+                                         progress=_progress("int8 onnx", n_val),
+                                         graph_optimization_level=ort_opt)
     results["size_mb"] = {"fp32": model_size_mb(fp32_onnx), "int8": model_size_mb(int8_onnx)}
 
     # 6. latency benchmark (CPU EP — the representative int8 speedup metric)
     print("[6/6] latency benchmark (ORT CPU EP)")
     b = cfg["benchmark"]
     results["latency_ms"] = {
-        "fp32": benchmark_onnx(fp32_onnx, b["runs"], b["warmup"]),
-        "int8": benchmark_onnx(int8_onnx, b["runs"], b["warmup"]),
+        "fp32": benchmark_onnx(fp32_onnx, b["runs"], b["warmup"],
+                               graph_optimization_level=ort_opt),
+        "int8": benchmark_onnx(int8_onnx, b["runs"], b["warmup"],
+                               graph_optimization_level=ort_opt),
     }
 
     (out / "results.json").write_text(json.dumps(results, indent=2))

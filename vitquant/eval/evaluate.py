@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 
 from vitquant.eval.metrics import AccuracyMeter
 from vitquant.quant.fake_quant import FakeQuantize, set_quantizing
+from vitquant.utils.ort_session import create_cpu_session
 
 ProgressFn = Callable[[int, int], None]  # progress(batch_index, total_batches)
 
@@ -37,9 +38,9 @@ def evaluate_torch(model: nn.Module, loader: DataLoader, class_indices: list[int
 
 def evaluate_onnx(onnx_path: str | Path, loader: DataLoader,
                   class_indices: list[int], max_batches: Optional[int] = None,
-                  progress: Optional[ProgressFn] = None) -> dict:
-    import onnxruntime as ort
-    sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
+                  progress: Optional[ProgressFn] = None,
+                  graph_optimization_level: Optional[str] = None) -> dict:
+    sess = create_cpu_session(onnx_path, graph_optimization_level)
     meter = AccuracyMeter()
     total = _num_batches(loader, max_batches)
     for i, (x, y) in enumerate(loader):

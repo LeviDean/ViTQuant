@@ -78,3 +78,31 @@ quant:
   > your server lacks AVX-512, use `weight_bits=8` for the real delivery
   > layer — the research layer's simulated W4A8 accuracy numbers stay valid
   > either way, since they never touch ORT.
+
+## ORT graph-optimization crashes on some CPUs (cloud/virtualized x86-64)
+
+Confirmed on an AMD EPYC cloud VM (nested virtualization, no AVX-512): ORT's
+`sess.run()` on a **plain W8A8** quantized graph crashed with the same
+`Illegal instruction (core dumped)` SIGILL — not int4-specific after all.
+Bisected by trying each `onnxruntime.GraphOptimizationLevel` in turn:
+`ORT_DISABLE_ALL` and `ORT_ENABLE_BASIC` ran fine; `ORT_ENABLE_EXTENDED`
+(ORT's default is `ORT_ENABLE_ALL`, which includes everything `EXTENDED`
+does) crashed — ORT fuses the QuantizeLinear/DequantizeLinear pattern into a
+specialized kernel at that level, and that fused kernel is what crashes on
+this hardware.
+
+Every ORT session in the delivery layer (`evaluate_onnx`, `benchmark_onnx`)
+now goes through `vitquant/utils/ort_session.py::create_cpu_session`, which
+accepts an optional `graph_optimization_level`. Default is `None` (ORT's own
+default — fastest on healthy hardware, unchanged behavior). If you hit this
+crash, add to your config:
+
+```yaml
+onnx:
+  graph_optimization_level: basic   # disable | basic | extended | all
+```
+
+`scripts/run_all.py` and `scripts/evaluate.py --onnx` both read this key
+automatically. This trades a bit of ORT's fusion-based speed for stability;
+size/accuracy numbers are unaffected (optimization level only changes how
+the graph executes, not what it computes).

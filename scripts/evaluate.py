@@ -22,8 +22,10 @@ def main() -> None:
                            d["download"])
 
     if args.onnx:
+        ort_opt = cfg.get("onnx", {}).get("graph_optimization_level")
         res = evaluate_onnx(args.onnx, val, IMAGENETTE_TO_IMAGENET1K,
-                            cfg["eval"]["max_batches"])
+                            cfg["eval"]["max_batches"],
+                            graph_optimization_level=ort_opt)
         print(f"[evaluate] onnx {args.onnx}: top1={res['top1']:.4f} top5={res['top5']:.4f}")
     else:
         device = resolve_device(cfg["device"])
