@@ -51,22 +51,35 @@ class TorchCalibrationReader(CalibrationDataReader):
 
 
 _WEIGHT_TYPE_BY_BITS = {8: QuantType.QInt8, 4: QuantType.QInt4}
+_QUANT_FORMATS = {"qdq": QuantFormat.QDQ, "qoperator": QuantFormat.QOperator}
 
 
 def quantize_onnx(fp32_path: str | Path, int8_path: str | Path,
                   calib_loader: DataLoader,
                   num_batches: Optional[int] = None,
-                  weight_bits: int = 8) -> Path:
-    """ORT static quantization: QDQ format, per-channel weights (matches the
-    research-layer default scheme), activation fixed at U8 (recommended for x86-64
-    CPU EP). weight_bits selects the weight grid: 8 (default, real INT8 speedup on
-    CPU) or 4 (real size/accuracy numbers via ORT's contrib Q/DQ ops, but ORT's CPU
-    EP has no int4 matmul kernel, so this does NOT yield a real latency speedup)."""
+                  weight_bits: int = 8,
+                  quant_format: str = "qdq") -> Path:
+    """ORT static quantization, per-channel weights (matches the research-layer
+    default scheme), activation fixed at U8 (recommended for x86-64 CPU EP).
+    weight_bits selects the weight grid: 8 (default, real INT8 speedup on CPU)
+    or 4 (real size/accuracy numbers via ORT's contrib Q/DQ ops, but ORT's CPU
+    EP has no int4 matmul kernel, so this does NOT yield a real latency
+    speedup). quant_format: "qdq" (default) inserts Quantize/DequantizeLinear
+    nodes and relies on ORT's graph optimizer to fuse them into a fast int8
+    kernel at runtime (see vitquant/utils/ort_session.py — that fusion is what
+    crashes on some CPUs); "qoperator" bakes the quantized op (e.g.
+    QLinearMatMul) directly into the graph at quantization time, so the fast
+    kernel is used regardless of the runtime graph optimization level."""
     try:
         weight_type = _WEIGHT_TYPE_BY_BITS[weight_bits]
     except KeyError:
         raise ValueError(f"Unsupported weight_bits={weight_bits}; "
                          f"choose from {sorted(_WEIGHT_TYPE_BY_BITS)}")
+    try:
+        fmt = _QUANT_FORMATS[quant_format]
+    except KeyError:
+        raise ValueError(f"Unsupported quant_format={quant_format!r}; "
+                         f"choose from {sorted(_QUANT_FORMATS)}")
     if weight_bits == 4:
         _check_int4_cpu_support()
 
@@ -77,7 +90,7 @@ def quantize_onnx(fp32_path: str | Path, int8_path: str | Path,
         quantize_static(
             str(pre_path), str(int8_path),
             TorchCalibrationReader(calib_loader, num_batches),
-            quant_format=QuantFormat.QDQ,
+            quant_format=fmt,
             per_channel=True,
             weight_type=weight_type,
             activation_type=QuantType.QUInt8,  # U8S8/U8S4: recommended for x86-64 CPU EP

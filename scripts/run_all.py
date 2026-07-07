@@ -91,10 +91,13 @@ def main() -> None:
     base_qc = qconfig_from_dict(cfg["quant"])
     # Optional escape hatch: some CPUs crash (SIGILL) when ORT fuses quantized
     # ops at its default optimization level — see vitquant/utils/ort_session.py.
-    ort_opt = cfg.get("onnx", {}).get("graph_optimization_level")
+    onnx_cfg = cfg.get("onnx", {})
+    ort_opt = onnx_cfg.get("graph_optimization_level")
+    ort_quant_format = onnx_cfg.get("quant_format", "qdq")
     results: dict = {"model": name, "device": str(device),
                      "weight_bits": base_qc.weight.bits,
-                     "activation_bits": base_qc.activation.bits}
+                     "activation_bits": base_qc.activation.bits,
+                     "onnx_quant_format": ort_quant_format}
 
     print(f"Loading checkpoint {ckpt} ...")
     model, data_cfg = load_model(name, ckpt)
@@ -150,7 +153,8 @@ def main() -> None:
     fp32_model, _ = load_model(name, ckpt)  # fresh fp32 weights for export
     fp32_onnx = export_fp32_onnx(fp32_model, out / f"{name}.fp32.onnx")
     int8_onnx = quantize_onnx(fp32_onnx, out / f"{name}.int8.onnx", calib,
-                              weight_bits=base_qc.weight.bits)
+                              weight_bits=base_qc.weight.bits,
+                              quant_format=ort_quant_format)
     results["fp32_onnx"] = evaluate_onnx(fp32_onnx, val, CLS, max_b,
                                          progress=_progress("fp32 onnx", n_val),
                                          graph_optimization_level=ort_opt)
@@ -182,6 +186,7 @@ def build_report(r: dict, args) -> str:
     sz, lat = r["size_mb"], r["latency_ms"]
     wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
     scheme = f"W{wbits}A{abits}"
+    onnx_format = r.get("onnx_quant_format", "qdq").upper()
 
     acc_rows = [
         ["FP32 (PyTorch)", pct(fp32_t["top1"]), pct(fp32_t["top5"]), "-"],
@@ -189,7 +194,7 @@ def build_report(r: dict, args) -> str:
          pct(fp32_t["top1"] - fp32_o["top1"])],
         [f"{scheme} simulated (custom kernel)", pct(int8_s["top1"]), pct(int8_s["top5"]),
          pct(fp32_t["top1"] - int8_s["top1"])],
-        [f"{scheme} real (ORT QDQ)", pct(int8_o["top1"]), pct(int8_o["top5"]),
+        [f"{scheme} real (ORT {onnx_format})", pct(int8_o["top1"]), pct(int8_o["top5"]),
          pct(fp32_t["top1"] - int8_o["top1"])],
     ]
     parts = [f"# Quantization Report: {r['model']} ({scheme})",

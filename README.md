@@ -106,3 +106,26 @@ onnx:
 automatically. This trades a bit of ORT's fusion-based speed for stability;
 size/accuracy numbers are unaffected (optimization level only changes how
 the graph executes, not what it computes).
+
+**`graph_optimization_level: basic` alone gives back correctness but not
+speed**: with fusion disabled, the QDQ graph runs as
+dequantize→fp32-compute→requantize for every quantized op, i.e. full fp32
+compute *plus* quantize/dequantize overhead — slower than plain fp32, not
+faster. To get a real kernel without depending on the (crashing) fusion pass,
+quantize with `QuantFormat.QOperator` instead of the default `QDQ`:
+`quantize_static` bakes the quantized op (e.g. `QLinearMatMul`) into the
+graph directly, so the fast kernel is already present regardless of the
+runtime optimization level.
+
+```yaml
+onnx:
+  graph_optimization_level: basic   # keep the confirmed-safe level
+  quant_format: qoperator           # qdq (default) | qoperator
+```
+
+Try `quant_format: qoperator` together with `graph_optimization_level: basic`
+first (both individually confirmed not to crash) — if this gets real speedup
+back, no need to touch `graph_optimization_level` further. Only experiment
+with raising it back toward `all` if you want to test whether QOperator format
+itself avoids the crash independent of the optimization level, since that
+hasn't been confirmed and could still crash.
