@@ -14,6 +14,9 @@ dependencies = [
     "pyyaml",
     "numpy",
     "matplotlib",
+    # SAM support: QuantSamAttention mirrors SamVisionAttention internals
+    # (relative position embeddings added pre-softmax); re-verify on bump.
+    "transformers>=5.13,<5.14",
 ]
 
 [build-system]
