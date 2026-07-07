@@ -68,3 +68,13 @@ quant:
   native int4 matmul kernel, so **W4A8 latency does not reflect a real hardware
   speedup** — treat the accuracy and size numbers as the meaningful W4A8 result,
   and the INT8 latency number as the real deployment speedup reference.
+
+  > **x86-64 CPUs without AVX-512**: ORT's int4 contrib kernel (`com.microsoft`
+  > domain) needs AVX-512 and otherwise crashes the process with `Illegal
+  > instruction (core dumped)` — an OS-level SIGILL, not a catchable Python
+  > error. `quantize_onnx(weight_bits=4)` now checks `/proc/cpuinfo` for
+  > `avx512f` on x86-64 Linux first and raises a clear `RuntimeError` instead.
+  > Apple Silicon (arm64) is unaffected and uses a different kernel path. If
+  > your server lacks AVX-512, use `weight_bits=8` for the real delivery
+  > layer — the research layer's simulated W4A8 accuracy numbers stay valid
+  > either way, since they never touch ORT.

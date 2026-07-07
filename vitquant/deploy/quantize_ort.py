@@ -1,9 +1,33 @@
+import platform
 from pathlib import Path
 from typing import Optional
 
 from onnxruntime.quantization import (CalibrationDataReader, QuantFormat, QuantType,
                                       quant_pre_process, quantize_static)
 from torch.utils.data import DataLoader
+
+
+def _check_int4_cpu_support() -> None:
+    """ORT's int4 QuantizeLinear/DequantizeLinear contrib kernel (com.microsoft
+    domain) requires AVX-512 on x86-64; without it the process is killed with
+    SIGILL (Illegal instruction) deep in native code, with no Python traceback.
+    Fail loudly and early instead. Only x86-64/Linux is checked: Apple Silicon
+    (arm64) uses a different kernel path and is unaffected; other platforms
+    can't be checked here so we don't block them."""
+    if platform.machine() not in ("x86_64", "AMD64"):
+        return
+    cpuinfo = Path("/proc/cpuinfo")
+    if not cpuinfo.exists():
+        return
+    flags = cpuinfo.read_text()
+    if "avx512f" not in flags:
+        raise RuntimeError(
+            "weight_bits=4 needs ORT's int4 contrib kernel, which requires AVX-512 "
+            "on x86-64 CPUs. This CPU lacks it (checked /proc/cpuinfo for 'avx512f') "
+            "and would crash the process with SIGILL instead of raising a Python "
+            "error. Use weight_bits=8 for the real ORT delivery layer on this "
+            "machine — the research layer's simulated W4A8 accuracy numbers "
+            "(vitquant.quant, no ORT involved) remain valid regardless.")
 
 
 class TorchCalibrationReader(CalibrationDataReader):
@@ -43,6 +67,8 @@ def quantize_onnx(fp32_path: str | Path, int8_path: str | Path,
     except KeyError:
         raise ValueError(f"Unsupported weight_bits={weight_bits}; "
                          f"choose from {sorted(_WEIGHT_TYPE_BY_BITS)}")
+    if weight_bits == 4:
+        _check_int4_cpu_support()
 
     fp32_path, int8_path = Path(fp32_path), Path(int8_path)
     pre_path = fp32_path.with_suffix(".pre.onnx")
