@@ -44,6 +44,23 @@ def pct(x: float) -> str:
     return f"{100 * x:.2f}%"
 
 
+def _progress(label: str, total: int) -> callable:
+    """Print a status line every ~20% of batches, so long eval passes don't
+    look hung on a server terminal. Matches evaluate_torch/onnx's progress(i, n)."""
+    step = max(1, total // 5)
+
+    def cb(i: int, n: int) -> None:
+        if (i + 1) % step == 0 or i + 1 == n:
+            print(f"    {label}: batch {i + 1}/{n}")
+    return cb
+
+
+def _calib_progress(label: str, total: int) -> callable:
+    """Same as _progress but matches calibrate()'s progress(i)-only signature."""
+    inner = _progress(label, total)
+    return lambda i: inner(i, total)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
@@ -67,45 +84,58 @@ def main() -> None:
     val = build_val_loader(d["root"], data_cfg, d["batch_size"], d["num_workers"], d["download"])
     calib = build_calib_loader(d["root"], data_cfg, d["calib_images"],
                                d["calib_batch_size"], d["num_workers"], d["download"])
+    n_val = len(val) if max_b is None else min(max_b, len(val))
+    n_calib = len(calib)  # calibrate() has no max_batches limit in this pipeline
 
     # 1. fp32 torch baseline
-    print(f"[1/6] fp32 baseline on {device}")
-    results["fp32_torch"] = evaluate_torch(model, val, CLS, device, max_b)
+    print(f"[1/6] fp32 baseline on {device} ({n_val} batches)")
+    results["fp32_torch"] = evaluate_torch(model, val, CLS, device, max_b,
+                                           progress=_progress("fp32", n_val))
 
     # 2. simulated INT8 (research layer)
-    print("[2/6] simulated INT8 (custom kernel)")
+    print(f"[2/6] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
     qmodel = convert_vit(model, base_qc)
-    calibrate(qmodel, calib, device)
-    results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b)
+    calibrate(qmodel, calib, device, progress=_calib_progress("calib", n_calib))
+    print(f"[2/6] simulated INT8: evaluating ({n_val} batches)")
+    results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
+                                               progress=_progress("int8 sim", n_val))
 
-    # 3. block sensitivity
+    # 3. block sensitivity (len(groups)+1 full eval passes — can take a while)
     if not args.skip_sensitivity:
         print("[3/6] per-block sensitivity sweep")
-        results["sensitivity"] = block_sensitivity(qmodel, val, CLS, device, max_b)
+        results["sensitivity"] = block_sensitivity(
+            qmodel, val, CLS, device, max_b,
+            log=lambda msg: print(f"    [sensitivity] {msg}"))
     else:
         print("[3/6] skipped")
 
     # 4. ablation matrix (each variant needs a fresh model: weights were shared in-place)
     if not args.skip_ablation:
-        print("[4/6] ablation matrix")
+        variants = ablation_qconfigs(base_qc)
+        print(f"[4/6] ablation matrix ({len(variants)} variants)")
         results["ablation"] = {}
-        for label, qc in ablation_qconfigs(base_qc).items():
+        for i, (label, qc) in enumerate(variants.items(), 1):
+            print(f"    variant {i}/{len(variants)}: {label}")
             m, _ = load_model(name, ckpt)
             qm = convert_vit(m, qc)
             calibrate(qm, calib, device)
-            results["ablation"][label] = evaluate_torch(qm, val, CLS, device, max_b)
+            results["ablation"][label] = evaluate_torch(
+                qm, val, CLS, device, max_b, progress=_progress(f"variant {i}", n_val))
             print(f"    {label}: top1={results['ablation'][label]['top1']:.4f}")
     else:
         print("[4/6] skipped")
 
     # 5. delivery layer: ONNX export + ORT real INT8
-    print("[5/6] ONNX export + ORT static INT8")
+    print("[5/6] ONNX export + ORT static INT8 (export/quantize give no progress "
+         "signal — ORT internal, may take a few minutes on larger models)")
     fp32_model, _ = load_model(name, ckpt)  # fresh fp32 weights for export
     fp32_onnx = export_fp32_onnx(fp32_model, out / f"{name}.fp32.onnx")
     int8_onnx = quantize_onnx(fp32_onnx, out / f"{name}.int8.onnx", calib,
                               weight_bits=base_qc.weight.bits)
-    results["fp32_onnx"] = evaluate_onnx(fp32_onnx, val, CLS, max_b)
-    results["int8_onnx"] = evaluate_onnx(int8_onnx, val, CLS, max_b)
+    results["fp32_onnx"] = evaluate_onnx(fp32_onnx, val, CLS, max_b,
+                                         progress=_progress("fp32 onnx", n_val))
+    results["int8_onnx"] = evaluate_onnx(int8_onnx, val, CLS, max_b,
+                                         progress=_progress("int8 onnx", n_val))
     results["size_mb"] = {"fp32": model_size_mb(fp32_onnx), "int8": model_size_mb(int8_onnx)}
 
     # 6. latency benchmark (CPU EP — the representative int8 speedup metric)
