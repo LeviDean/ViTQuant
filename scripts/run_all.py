@@ -2,6 +2,7 @@
 """One-command full evaluation: fp32 baseline, simulated INT8, block sensitivity,
 ablation matrix, ORT real INT8 (accuracy + size + latency), markdown report."""
 import argparse
+import faulthandler
 import json
 import sys
 from dataclasses import replace
@@ -24,6 +25,12 @@ from vitquant.utils.device import resolve_device
 # common under nohup/log redirection/some containers — so progress prints can
 # sit invisible until the process exits. Force line buffering unconditionally.
 sys.stdout.reconfigure(line_buffering=True)
+
+# Native crashes (e.g. SIGILL from an unsupported CPU instruction in a C
+# extension) kill the process with no Python traceback and no dmesg access in
+# many containers. faulthandler installs its own handler for exactly this: it
+# prints the Python-level stack (which call was in flight) before dying.
+faulthandler.enable()
 
 CLS = IMAGENETTE_TO_IMAGENET1K
 ACC_GAP_WARN = 0.01  # spec: flag if |simulated - ORT real| top-1 gap > 1%
