@@ -16,6 +16,9 @@ class _VisionEncoderWrapper(torch.nn.Module):
         self.vision_encoder = vision_encoder
 
     def forward(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        # index 0 == last_hidden_state; image_embeds (index that would
+        # otherwise come first) stays None unless with_projection=True,
+        # which SamVisionEncoder never sets — ModelOutput skips None fields.
         return self.vision_encoder(pixel_values)[0]
 
 
@@ -27,7 +30,18 @@ def export_sam_vision_encoder_onnx(model, out_path: str | Path,
     prompt_encoder/mask_decoder stay in PyTorch. Validates with onnx.checker
     and a numerical parity gate (atol 1e-4) against the same wrapper run in
     PyTorch, same pattern as vitquant/deploy/export_onnx.py::export_fp32_onnx.
-    img_size defaults to model.config.vision_config.image_size if not given."""
+    img_size defaults to model.config.vision_config.image_size if not given.
+
+    Only the batch axis is dynamic — img_size itself is baked into the graph.
+    SAM's relative-position-embedding index tables (see get_rel_pos in
+    SamVisionAttention) are computed from the traced tensor's concrete height/
+    width and become fixed constants at export time (hence the TracerWarnings
+    torch.onnx.export emits here). Running this graph at a different
+    resolution than it was exported with would not just lose accuracy, it
+    would apply the wrong index table against a differently-shaped feature
+    map. This is safe in practice because SamProcessor always resizes inputs
+    to a fixed square before feeding the model — just don't reuse one export
+    across configs with different img_size."""
     import onnxruntime as ort
 
     if img_size is None:
