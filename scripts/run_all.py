@@ -97,7 +97,8 @@ def main() -> None:
     results: dict = {"model": name, "device": str(device),
                      "weight_bits": base_qc.weight.bits,
                      "activation_bits": base_qc.activation.bits,
-                     "onnx_quant_format": ort_quant_format}
+                     "onnx_quant_format": ort_quant_format,
+                     "onnx_graph_optimization_level": ort_opt}
 
     print(f"Loading checkpoint {ckpt} ...")
     model, data_cfg = load_model(name, ckpt)
@@ -218,6 +219,17 @@ def build_report(r: dict, args) -> str:
     parts.append(md_table(["Variant", "Latency (ms)", "Speedup"], [
         ["FP32", f"{lat['fp32']:.2f}", "1.0x"],
         [scheme, f"{lat['int8']:.2f}", f"{lat['fp32'] / lat['int8']:.2f}x"]]))
+    opt_level = r.get("onnx_graph_optimization_level")
+    if onnx_format == "QDQ" and opt_level in ("basic", "disable"):
+        parts.append(
+            f"\n> **Note**: `onnx.graph_optimization_level: {opt_level}` is set "
+            f"(likely a workaround for an ORT crash on this CPU — see README). "
+            f"At this level ORT does not fuse QDQ into a real int8 kernel: the "
+            f"graph runs dequantize→fp32-compute→requantize for every "
+            f"quantized op, so the {scheme} latency above reflects fp32 compute "
+            f"plus quantize/dequantize overhead, not real int8 hardware speed. "
+            f"Treat only the accuracy and size/compression numbers above as "
+            f"valid delivery-layer results on this machine.")
     if wbits < 8:
         parts.append(f"\n> Note: ORT's CPU EP has no native INT{wbits} matmul kernel — "
                      f"the {scheme} latency above reflects the QDQ-graph overhead of "

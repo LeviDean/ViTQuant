@@ -107,25 +107,25 @@ automatically. This trades a bit of ORT's fusion-based speed for stability;
 size/accuracy numbers are unaffected (optimization level only changes how
 the graph executes, not what it computes).
 
-**`graph_optimization_level: basic` alone gives back correctness but not
-speed**: with fusion disabled, the QDQ graph runs as
-dequantize→fp32-compute→requantize for every quantized op, i.e. full fp32
-compute *plus* quantize/dequantize overhead — slower than plain fp32, not
-faster. To get a real kernel without depending on the (crashing) fusion pass,
-quantize with `QuantFormat.QOperator` instead of the default `QDQ`:
-`quantize_static` bakes the quantized op (e.g. `QLinearMatMul`) into the
-graph directly, so the fast kernel is already present regardless of the
-runtime optimization level.
+**`graph_optimization_level: basic` gives back correctness but not speed**:
+with fusion disabled, the QDQ graph runs as dequantize→fp32-compute→requantize
+for every quantized op — full fp32 compute *plus* quantize/dequantize
+overhead, slower than plain fp32. We tried working around this with
+`QuantFormat.QOperator` (`onnx.quant_format: qoperator`), which bakes the
+quantized op directly into the graph at quantize time instead of relying on
+runtime fusion — **also confirmed to crash with the same SIGILL**, at every
+optimization level including `ORT_DISABLE_ALL`, and on two onnxruntime
+versions (1.27.0 and 1.24.1). This rules out a fusion-pass or
+version-specific bug: **on this class of hardware, ORT's int8 quantized
+kernel itself cannot execute at all**, regardless of how the graph reaches
+it. There is no further code-level workaround.
 
-```yaml
-onnx:
-  graph_optimization_level: basic   # keep the confirmed-safe level
-  quant_format: qoperator           # qdq (default) | qoperator
-```
-
-Try `quant_format: qoperator` together with `graph_optimization_level: basic`
-first (both individually confirmed not to crash) — if this gets real speedup
-back, no need to touch `graph_optimization_level` further. Only experiment
-with raising it back toward `all` if you want to test whether QOperator format
-itself avoids the crash independent of the optimization level, since that
-hasn't been confirmed and could still crash.
+Practical takeaway for affected hardware: use `quant_format: qdq` (default)
+with `graph_optimization_level: basic` — the only combination that doesn't
+crash. The report will show a latency number for this, but it does **not**
+reflect real int8 speed (it's the fp32-fallback path); `scripts/run_all.py`
+detects this configuration and adds a warning note to the report so it isn't
+mistaken for a real speedup. The accuracy and size/compression numbers remain
+valid — only the latency comparison is unusable on this hardware. Getting a
+genuine ORT CPU int8 speedup number requires different hardware (e.g. a
+non-virtualized/physical x86-64 machine, or a different cloud instance).
