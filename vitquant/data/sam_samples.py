@@ -21,9 +21,11 @@ def _sample_indices(root: str | Path, download: bool, num_samples: int,
 def _processor_inputs(processor, img, point: Optional[tuple[int, int]]) -> tuple[dict, tuple[int, int]]:
     """Run the processor on a single PIL image with a point prompt (default:
     image center), returning the model-ready inputs dict and the point
-    actually used. SamProcessor emits input_points as float64, which MPS
-    can't run ops on (int64 sizes are fine there, only float64 is
-    unsupported); float32 has ample precision for pixel coordinates."""
+    actually used. Shared by build_sam_inputs and build_sam_qualitative_samples
+    so the processor-call and dtype-fix logic can't drift apart either.
+    SamProcessor emits input_points as float64, which MPS can't run ops on
+    (int64 sizes are fine there, only float64 is unsupported); float32 has
+    ample precision for pixel coordinates."""
     w, h = img.size
     p = point if point is not None else (w // 2, h // 2)
     inputs = processor(images=img, input_points=[[list(p)]], return_tensors="pt")

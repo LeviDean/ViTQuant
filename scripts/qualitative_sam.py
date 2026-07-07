@@ -22,6 +22,8 @@ from vitquant.quant.sam_convert import convert_sam_vision_encoder
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
 
+BAD_IOU_THRESHOLD = 0.9  # below this, title in red as "worth a second look"
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
@@ -45,6 +47,8 @@ def main() -> None:
     quant_model = quant_model.eval().to(device)
 
     print(f"Building {args.num_samples} qualitative samples ...")
+    # seed differs from calib_samples' seed=0 above so visualization uses images
+    # not seen during calibration
     samples = build_sam_qualitative_samples(d["root"], processor, args.num_samples, seed=2, download=d["download"])
 
     results = []
@@ -55,6 +59,13 @@ def main() -> None:
             quant_out = quant_model(**inputs)
 
         fp32_best_idx = int(fp32_out.iou_scores[0, 0].argmax())
+        # quantization could in principle change which mask index the model
+        # itself would pick; the contour/IoU below always uses fp32's index
+        # (the "ground truth" choice) for both models, so that disagreement
+        # is invisible there — surface it separately here instead of hiding it.
+        quant_best_idx = int(quant_out.iou_scores[0, 0].argmax())
+        index_agrees = quant_best_idx == fp32_best_idx
+
         fp32_full = processor.image_processor.post_process_masks(
             fp32_out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0]
         quant_full = processor.image_processor.post_process_masks(
@@ -67,9 +78,11 @@ def main() -> None:
 
         results.append({
             "image": s["image"], "point": s["point"], "mask_idx": fp32_best_idx,
+            "quant_best_idx": quant_best_idx, "index_agrees": index_agrees,
             "iou": iou, "fp32_mask": fp32_mask, "quant_mask": quant_mask,
         })
-        print(f"  IoU={iou:.4f}  point={s['point']}  mask_idx={fp32_best_idx}")
+        flag = "" if index_agrees else f"  <-- quantization would pick mask #{quant_best_idx} instead"
+        print(f"  IoU={iou:.4f}  point={s['point']}  mask_idx={fp32_best_idx}{flag}")
 
     results.sort(key=lambda r: r["iou"])  # worst first
 
@@ -78,7 +91,9 @@ def main() -> None:
     grid_path = out / "qualitative_sam_grid.png"
     _save_grid(results, cfg["model"]["name"], grid_path)
 
-    summary = [{"point": r["point"], "mask_idx": r["mask_idx"], "iou": r["iou"]} for r in results]
+    summary = [{"point": r["point"], "mask_idx": r["mask_idx"], "iou": r["iou"],
+               "quant_best_idx": r["quant_best_idx"], "index_agrees": r["index_agrees"]}
+              for r in results]
     (out / "qualitative_sam.json").write_text(json.dumps(summary, indent=2))
     print(f"\nWrote {grid_path} and {out / 'qualitative_sam.json'}")
 
@@ -99,8 +114,9 @@ def _save_grid(results: list[dict], model_name: str, out_path: Path, cols: int =
         px, py = r["point"]
         ax.scatter([px], [py], marker="*", s=200, c="yellow", edgecolors="black", linewidths=1)
         ax.axis("off")
-        bad = r["iou"] < 0.9  # threshold for "worth a second look" — tune if needed
-        ax.set_title(f"IoU={r['iou']:.3f} (mask #{r['mask_idx']})", fontsize=9,
+        bad = r["iou"] < BAD_IOU_THRESHOLD
+        idx_note = "" if r["index_agrees"] else f" [quant picks #{r['quant_best_idx']}]"
+        ax.set_title(f"IoU={r['iou']:.3f} (mask #{r['mask_idx']}){idx_note}", fontsize=9,
                     color="red" if bad else "black")
     for ax in axes[n:]:
         ax.axis("off")
