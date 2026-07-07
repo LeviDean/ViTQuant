@@ -10,6 +10,11 @@ from torchvision.datasets import Imagenette
 # parachute) -> their ImageNet-1k class indices.
 IMAGENETTE_TO_IMAGENET1K = [0, 217, 482, 491, 497, 566, 569, 571, 574, 701]
 
+IMAGENETTE_CLASS_NAMES = [
+    "tench", "English springer", "cassette player", "chain saw", "church",
+    "French horn", "garbage truck", "gas pump", "golf ball", "parachute",
+]
+
 
 def _dataset(root: str | Path, split: str, data_cfg: dict, download: bool) -> Imagenette:
     root = Path(root)
@@ -35,3 +40,15 @@ def build_calib_loader(root: str | Path, data_cfg: dict, calib_images: int = 256
     idx = torch.randperm(len(ds), generator=gen)[:calib_images].tolist()
     return DataLoader(Subset(ds, idx), batch_size=batch_size, shuffle=False,
                       num_workers=num_workers)
+
+
+def build_sample_loader(root: str | Path, data_cfg: dict, num_samples: int = 30,
+                        seed: int = 0, download: bool = True) -> DataLoader:
+    """Fixed random subset of the val split, batch_size=1, for per-image
+    qualitative inspection. The val split is class-sorted and build_val_loader
+    doesn't shuffle, so a plain slice would only cover one or two classes —
+    this shuffles (seeded, reproducible) to get a spread across classes."""
+    ds = _dataset(root, "val", data_cfg, download)
+    gen = torch.Generator().manual_seed(seed)
+    idx = torch.randperm(len(ds), generator=gen)[:num_samples].tolist()
+    return DataLoader(Subset(ds, idx), batch_size=1, shuffle=False, num_workers=0)
