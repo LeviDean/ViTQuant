@@ -13,6 +13,7 @@ dependencies = [
     "onnxruntime",
     "pyyaml",
     "numpy",
+    "matplotlib",
 ]
 
 [build-system]

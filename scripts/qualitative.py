@@ -2,11 +2,15 @@
 """Qualitative comparison: run fp32 vs quantized models on real sample images
 and inspect where their top-1 predictions actually differ, with confidence
 scores. Aggregate accuracy is already covered by scripts/run_all.py — this is
-for eyeballing specific cases quantization flips."""
+for eyeballing specific cases quantization flips. Saves a contact-sheet image
+of the actual sample photos annotated with both models' predictions."""
 import argparse
 import json
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")  # headless-safe: servers have no display
+import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
@@ -29,6 +33,14 @@ def _predict(model: torch.nn.Module, x: torch.Tensor, device: torch.device) -> t
     probs = F.softmax(logits, dim=1)[0]
     top1 = int(probs.argmax())
     return top1, float(probs[top1])
+
+
+def _denormalize(x: torch.Tensor, mean: tuple, std: tuple):
+    """x: (1, 3, H, W) normalized tensor -> (H, W, 3) float array in [0, 1] for imshow."""
+    mean_t = torch.tensor(mean).view(3, 1, 1)
+    std_t = torch.tensor(std).view(3, 1, 1)
+    img = x[0].cpu() * std_t + mean_t
+    return img.clamp(0, 1).permute(1, 2, 0).numpy()
 
 
 def _predict_onnx(sess, x: torch.Tensor) -> tuple[int, float]:
@@ -66,8 +78,9 @@ def main() -> None:
         ort_sess = ort.InferenceSession(args.onnx, providers=["CPUExecutionProvider"])
 
     samples = build_sample_loader(d["root"], data_cfg, args.num_samples)
+    mean, std = data_cfg["mean"], data_cfg["std"]
 
-    rows = []
+    rows, images = [], []
     for i, (x, y) in enumerate(samples):
         true_idx = int(y)
         fp32_top1, fp32_conf = _predict(fp32_model, x, device)
@@ -92,6 +105,7 @@ def main() -> None:
                 "real_prediction_changed": fp32_top1 != ort_top1,
             })
         rows.append(row)
+        images.append(_denormalize(x, mean, std))
         flag = " <-- prediction changed" if row["sim_prediction_changed"] else ""
         print(f"[{i:3d}] true={row['true']:<18} "
              f"fp32={row['fp32_pred']:<18}({row['fp32_conf']:.2f}) "
@@ -110,7 +124,9 @@ def main() -> None:
     (out / "qualitative.json").write_text(json.dumps(rows, indent=2))
     report = _build_markdown(rows, cfg["model"]["name"])
     (out / "qualitative.md").write_text(report)
-    print(f"\nWrote {out / 'qualitative.json'} and {out / 'qualitative.md'}")
+    grid_path = out / "qualitative_grid.png"
+    _save_grid(rows, images, cfg["model"]["name"], grid_path)
+    print(f"\nWrote {out / 'qualitative.json'}, {out / 'qualitative.md'}, and {grid_path}")
 
 
 def _build_markdown(rows: list[dict], model_name: str) -> str:
@@ -145,6 +161,36 @@ def _build_markdown(rows: list[dict], model_name: str) -> str:
              f"int8(sim) correct {n_int8_correct}/{n}, "
              f"predictions flipped by quantization: {len(changed)}/{n}."]
     return "\n".join(lines) + "\n"
+
+
+def _save_grid(rows: list[dict], images: list, model_name: str, out_path: Path,
+              cols: int = 5) -> None:
+    """Contact-sheet visualization: the actual sample photos, each annotated
+    with true label and both models' predictions. Flipped predictions (the
+    interesting cases) are sorted first and titled in red."""
+    order = sorted(range(len(rows)), key=lambda i: not rows[i]["sim_prediction_changed"])
+    n = len(rows)
+    n_rows = max(1, (n + cols - 1) // cols)
+    fig, axes = plt.subplots(n_rows, cols, figsize=(cols * 2.6, n_rows * 3.6))
+    axes = axes.flatten() if n > 1 else [axes]
+
+    for ax, i in zip(axes, order):
+        r = rows[i]
+        ax.imshow(images[i])
+        ax.axis("off")
+        changed = r["sim_prediction_changed"]
+        title = (f"true: {r['true']}\n"
+                f"fp32: {r['fp32_pred']} ({r['fp32_conf']:.2f})\n"
+                f"int8: {r['int8_sim_pred']} ({r['int8_sim_conf']:.2f})")
+        ax.set_title(title, fontsize=7.5, color="red" if changed else "black", pad=6)
+    for ax in axes[n:]:
+        ax.axis("off")
+
+    fig.suptitle(f"Qualitative sample: {model_name} "
+                f"(red title = quantization flipped the prediction)", fontsize=11)
+    fig.subplots_adjust(hspace=0.8, wspace=0.15, top=0.92)
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
 
 
 if __name__ == "__main__":
