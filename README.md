@@ -14,6 +14,9 @@ quantization scheme cost?" before you commit to real hardware.
   and runs fp32 compute, so it measures accuracy precisely but produces no
   real speedup and no real on-disk compression.
 
+> **文档**：上手使用看 [USER_GUIDE.md](USER_GUIDE.md)（使用手册，中文）；实验目标与设置看
+> [EXPERIMENT_DESIGN.md](EXPERIMENT_DESIGN.md)；实现细节看 [PROJECT_REPORT.md](PROJECT_REPORT.md)。
+
 ## Why simulation only (NPU pre-research)
 
 The actual deployment target for this project is an edge NPU, not a CPU. Real
