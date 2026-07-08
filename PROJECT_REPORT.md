@@ -59,7 +59,7 @@ dq = (q - zero_point) * scale
 
 反向传播用直通估计器（Straight-Through Estimator，STE）：前向输出 `dq`，反向梯度按恒等函数传递（`x + (dq - x).detach()`），这样量化点不可导的问题被绕过，模型仍可训练/校准。
 
-`FakeQuantize` 模块有三种状态：`observing`（收集统计量，直通不改变数值）、`quantizing`（应用量化）、都不开（恒等映射）。`freeze()` 从 Observer 计算出 scale/zero_point 并切换到量化模式。这就是"模拟量化"的含义——数值上经过量化再反量化回 fp32，用 fp32 继续计算，所以能精确测精度损失，但不会有任何真实加速，也不产生任何真实的磁盘体积变化。
+`FakeQuantize` 模块有三种状态：`observing`（收集统计量，直通不改变数值）、`quantizing`（应用量化）、都不开（恒等映射）。`freeze()` 只负责从 Observer 计算出 scale/zero_point，是否真正应用量化由 `set_quantizing()` 独立控制（解耦细节见 §2.6）。这就是"模拟量化"的含义——数值上经过量化再反量化回 fp32，用 fp32 继续计算，所以能精确测精度损失，但不会有任何真实加速，也不产生任何真实的磁盘体积变化。
 
 ### 2.4 量化模块（`vitquant/quant/modules.py`）
 
@@ -119,7 +119,7 @@ dq = (q - zero_point) * scale
 - `quantize.py`：单次模拟量化实验（转换 → 校准 → 评估），输出 `quantize_result.json`
 - `evaluate.py`：仅评估 fp32 基线
 - `qualitative.py`：fp32 vs 模拟量化的逐样本预测对比，标出被量化"翻转"的 top-1 预测，输出 `qualitative.json`/`.md` 和标注过的样本图 `qualitative_grid.png`
-- `run_all.py`：一键跑完整研究流水线——
+- `run_classification.py`：一键跑完整研究流水线——
   1. fp32 torch 基线
   2. 研究层模拟 INT8（转换 + 校准 + 评估）
   3. 逐块敏感度扫描（可跳过，`--skip-sensitivity`）
@@ -127,8 +127,14 @@ dq = (q - zero_point) * scale
   5. 消融实验矩阵：默认方案 vs 权重逐张量 vs 激活对称 vs 不同 Observer（可跳过，`--skip-ablation`）
 
   产出 `results.json`（结构化数据）和 `report.md`（人类可读的 Markdown 报告，含精度对比表、**理论**体积压缩表——纯粹由位宽算出的算术比值、敏感度排名表、混合精度权衡表、消融矩阵表）。混合精度表里每一行的 top-1 都是真实评估的，不是把单块敏感度相加预测的——量化误差跨 block 非线性叠加，排名只用来决定优先保护谁。
-- `quantize_sam.py`：SAM 研究流水线——模拟量化 vision encoder，评估 fp32 vs 量化 mask 的自一致性 IoU，产出 `results.json` 和 `report.md`（IoU 表 + 理论压缩表）
+- `run_sam.py`：SAM 研究流水线——模拟量化 vision encoder，评估 fp32 vs 量化 mask 的自一致性 IoU，产出 `results.json` 和 `report.md`（IoU 表 + 理论压缩表）
 - `qualitative_sam.py`：SAM 逐样本 mask 轮廓可视化（fp32 vs 模拟量化），按 IoU 从低到高排序，产出 `qualitative_sam_grid.png` 和 `qualitative_sam.json`
+
+`run_classification.py` 和 `run_sam.py` 保持薄编排，两条流水线的公共部分抽到库里复用，脚本只负责各自任务特有的数据/模型/指标：
+
+- `vitquant/eval/report.py`：Markdown 表格渲染、理论压缩段、两份报告体（`classification_report` / `sam_report`）、统一写 `results.json`+`report.md`（`write_outputs`）
+- `vitquant/utils/progress.py`：长任务进度回调工厂（每 ~20% 打一行），两条线共用
+- `vitquant/quant/calibrate.py::run_calibration`：观察 → 冻结 → 量化的校准骨架只写一份，用"喂 batch 的函数"参数区分分类（`(x, label)` 元组）和 SAM（命名张量 dict）；`calibrate` / `calibrate_sam` 只是各自的薄封装
 
 ## 6. 离线权重与数据
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env python
-"""One-command research-layer evaluation: fp32 baseline, simulated INT8
-(fake-quant) accuracy, per-block sensitivity, a mixed-precision (top-K block
-protection) trade-off sweep, and a quantization-scheme ablation matrix, plus a
-markdown report. Simulated quantization measures the accuracy impact of a scheme
-(device-independent); it does not run a real int8 kernel. The theoretical
-compression ratio is reported from the weight bit-width (int8 weights are 1/4 of
-fp32)."""
+"""Classification ViT research pipeline (one command): fp32 baseline, simulated
+INT8 (fake-quant) accuracy, per-block sensitivity, a mixed-precision (top-K block
+protection) trade-off sweep, a quantization-scheme ablation matrix, and a
+per-image qualitative grid — plus a markdown report. Simulated quantization
+measures the accuracy impact of a scheme (device-independent); it does not run a
+real int8 kernel. The theoretical compression ratio is reported from the weight
+bit-width (int8 weights are 1/4 of fp32).
+
+The SAM counterpart is scripts/run_sam.py; reporting/progress/calibration
+helpers are shared under vitquant/."""
 import argparse
-import json
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -17,12 +19,14 @@ from vitquant.data.imagenette import (IMAGENETTE_TO_IMAGENET1K, build_calib_load
 from vitquant.eval.evaluate import (block_sensitivity, evaluate_torch,
                                     mixed_precision_sweep)
 from vitquant.eval.qualitative import save_classification_qualitative
+from vitquant.eval.report import classification_report, write_outputs
 from vitquant.models.loader import load_model
 from vitquant.quant.calibrate import calibrate
 from vitquant.quant.convert import convert_vit
 from vitquant.quant.qconfig import QConfig, qconfig_from_dict
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
+from vitquant.utils.progress import batch_progress, calib_progress
 
 # stdout is fully buffered (not line-buffered) unless attached to a real tty —
 # common under nohup/log redirection/some containers — so progress prints can
@@ -40,34 +44,6 @@ def ablation_qconfigs(base: QConfig) -> dict[str, QConfig]:
         "activation minmax obs": replace(base, activation=replace(base.activation, observer="minmax")),
         "activation percentile obs": replace(base, activation=replace(base.activation, observer="percentile")),
     }
-
-
-def md_table(headers: list[str], rows: list[list[str]]) -> str:
-    lines = ["| " + " | ".join(headers) + " |",
-             "|" + "|".join("---" for _ in headers) + "|"]
-    lines += ["| " + " | ".join(r) + " |" for r in rows]
-    return "\n".join(lines)
-
-
-def pct(x: float) -> str:
-    return f"{100 * x:.2f}%"
-
-
-def _progress(label: str, total: int) -> callable:
-    """Print a status line every ~20% of batches, so long eval passes don't
-    look hung on a server terminal. Matches evaluate_torch's progress(i, n)."""
-    step = max(1, total // 5)
-
-    def cb(i: int, n: int) -> None:
-        if (i + 1) % step == 0 or i + 1 == n:
-            print(f"    {label}: batch {i + 1}/{n}")
-    return cb
-
-
-def _calib_progress(label: str, total: int) -> callable:
-    """Same as _progress but matches calibrate()'s progress(i)-only signature."""
-    inner = _progress(label, total)
-    return lambda i: inner(i, total)
 
 
 def main() -> None:
@@ -90,7 +66,6 @@ def main() -> None:
     ckpt = cfg["model"]["checkpoint"]
     max_b = cfg["eval"]["max_batches"]
     out = Path(cfg["output_dir"])
-    out.mkdir(parents=True, exist_ok=True)
     base_qc = qconfig_from_dict(cfg["quant"])
     results: dict = {"model": name, "device": str(device),
                      "weight_bits": base_qc.weight.bits,
@@ -109,15 +84,15 @@ def main() -> None:
     # 1. fp32 torch baseline
     print(f"[1/6] fp32 baseline on {device} ({n_val} batches)")
     results["fp32_torch"] = evaluate_torch(model, val, CLS, device, max_b,
-                                           progress=_progress("fp32", n_val))
+                                           progress=batch_progress("fp32", n_val))
 
     # 2. simulated INT8 (research layer)
     print(f"[2/6] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
     qmodel = convert_vit(model, base_qc)
-    calibrate(qmodel, calib, device, progress=_calib_progress("calib", n_calib))
+    calibrate(qmodel, calib, device, progress=calib_progress("calib", n_calib))
     print(f"[2/6] simulated INT8: evaluating ({n_val} batches)")
     results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
-                                               progress=_progress("int8 sim", n_val))
+                                               progress=batch_progress("int8 sim", n_val))
 
     # 3. block sensitivity (len(groups)+1 full eval passes — can take a while)
     if not args.skip_sensitivity:
@@ -153,7 +128,7 @@ def main() -> None:
             qm = convert_vit(m, qc)
             calibrate(qm, calib, device)
             results["ablation"][label] = evaluate_torch(
-                qm, val, CLS, device, max_b, progress=_progress(f"variant {i}", n_val))
+                qm, val, CLS, device, max_b, progress=batch_progress(f"variant {i}", n_val))
             print(f"    {label}: top1={results['ablation'][label]['top1']:.4f}")
     else:
         print("[5/6] skipped")
@@ -170,62 +145,8 @@ def main() -> None:
     else:
         print("[6/6] skipped")
 
-    (out / "results.json").write_text(json.dumps(results, indent=2))
-    report = build_report(results)
-    (out / "report.md").write_text(report)
-    print(f"\nWrote {out / 'results.json'}, {out / 'report.md'}"
-         + (f", and {out / 'qualitative_grid.png'}" if not args.no_qualitative else "") + "\n")
-    print(report)
-
-
-def build_report(r: dict) -> str:
-    fp32_t, int8_s = r["fp32_torch"], r["int8_simulated"]
-    wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
-    scheme = f"W{wbits}A{abits}"
-
-    acc_rows = [
-        ["FP32 (PyTorch)", pct(fp32_t["top1"]), pct(fp32_t["top5"]), "-"],
-        [f"{scheme} simulated (custom kernel)", pct(int8_s["top1"]), pct(int8_s["top5"]),
-         pct(fp32_t["top1"] - int8_s["top1"])],
-    ]
-    parts = [f"# Quantization Report: {r['model']} ({scheme})",
-             f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) accuracy — "
-             f"device-independent, no real int8 kernel run.\n",
-             "## Accuracy\n",
-             md_table(["Variant", "Top-1", "Top-5", "Top-1 drop vs FP32"], acc_rows)]
-
-    # Theoretical weight compression (arithmetic from bit-width): int8 weights
-    # are 8/32 = 1/4 of fp32; W4 is 4/32 = 1/8. Activations aren't stored.
-    ratio = 32 / wbits
-    parts.append(f"\n## Theoretical Weight Compression\n")
-    parts.append(md_table(["Scheme", "Weight bits", "Compression vs FP32"], [
-        [scheme, str(wbits), f"{ratio:.1f}x"]]))
-
-    if "sensitivity" in r:
-        parts.append("\n## Per-Block Sensitivity (top-1 drop when only that block is quantized)\n")
-        parts.append(md_table(["Block", "Top-1 drop"],
-                              [[k, pct(v)] for k, v in r["sensitivity"].items()]))
-
-    if r.get("mixed_precision"):
-        parts.append(f"\n## Mixed-Precision Trade-off ({scheme} base, protected blocks kept FP32)\n")
-        parts.append("Protect the K most-sensitive blocks (kept FP32); quantize the rest at "
-                     f"{scheme}. Top-1 is measured, not predicted from summed per-block drops. "
-                     "Compression is over quantizable weights only (protected = 32-bit).\n")
-        mp_rows = []
-        for row in r["mixed_precision"]:
-            prot = ", ".join(row["protected"]) or "(none — uniform)"
-            mp_rows.append([str(row["k"]), prot, pct(row["top1"]),
-                            f"{row['avg_weight_bits']:.2f}", f"{row['compression']:.2f}x"])
-        parts.append(md_table(
-            ["K protected", "Blocks kept FP32", "Top-1", "Avg weight bits", "Compression vs FP32"],
-            mp_rows))
-
-    if "ablation" in r:
-        parts.append("\n## Ablation (simulated INT8)\n")
-        parts.append(md_table(["Config", "Top-1", "Top-5"],
-                              [[k, pct(v["top1"]), pct(v["top5"])]
-                               for k, v in r["ablation"].items()]))
-    return "\n".join(parts) + "\n"
+    note = f", and {out / 'qualitative_grid.png'}" if not args.no_qualitative else ""
+    write_outputs(out, results, classification_report(results), note)
 
 
 if __name__ == "__main__":

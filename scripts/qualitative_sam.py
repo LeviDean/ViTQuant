@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Standalone SAM qualitative comparison: overlay fp32 vs simulated-quantized
 SAM mask contours over real sample images (point prompt marked), sorted
-worst-IoU-first. quantize_sam.py also produces this automatically; use this
+worst-IoU-first. run_sam.py also produces this automatically; use this
 script to regenerate it on its own or with a different --num-samples."""
 import argparse
 

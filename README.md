@@ -70,13 +70,13 @@ offline servers.
 
 ```bash
 # smoke run on dev machine (small model, subset of val)
-.venv/bin/python scripts/run_all.py --config configs/deit_tiny.yaml
+.venv/bin/python scripts/run_classification.py --config configs/deit_tiny.yaml
 
 # full evaluation on the server
-python scripts/run_all.py --config configs/vit_base.yaml
+python scripts/run_classification.py --config configs/vit_base.yaml
 ```
 
-`run_all.py` runs the fp32 baseline, simulated INT8 accuracy, per-block
+`run_classification.py` runs the fp32 baseline, simulated INT8 accuracy, per-block
 sensitivity, a mixed-precision (top-K block protection) trade-off sweep, a
 quantization-scheme ablation matrix, the theoretical weight compression ratio
 (arithmetic, from bit-width), AND a per-image visualization grid — one command
@@ -102,7 +102,7 @@ Single experiments: `scripts/quantize.py --config ...` (one simulated INT8
 experiment: convert -> calibrate -> evaluate, writes `quantize_result.json`),
 `scripts/evaluate.py --config ...` (fp32 baseline only).
 
-Standalone visualization (already produced by `run_all.py`; use this to
+Standalone visualization (already produced by `run_classification.py`; use this to
 regenerate it on its own or with a different sample count):
 `scripts/qualitative.py --config ... [--num-samples N]`.
 
@@ -154,7 +154,7 @@ Copy (or generate directly on the target machine) the resulting
 ### Usage
 
 ```bash
-python scripts/quantize_sam.py --config configs/sam_vit_b.yaml
+python scripts/run_sam.py --config configs/sam_vit_b.yaml
 ```
 
 One command writes the metric report AND the visual examples to

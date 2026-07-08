@@ -1,6 +1,6 @@
 """Qualitative visualization for quantization comparison — shared by the
 standalone scripts (scripts/qualitative*.py) and the main evaluation scripts
-(run_all.py / quantize_sam.py), so a comparison run always produces both the
+(run_classification.py / run_sam.py), so a comparison run always produces both the
 metric report AND visual examples from one code path."""
 import json
 from pathlib import Path

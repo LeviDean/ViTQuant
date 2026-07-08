@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 """Standalone qualitative comparison: run fp32 vs simulated-quantized models on
 real sample images and save a contact-sheet grid annotated with both models'
-predictions (flipped cases first, titled red). run_all.py also produces this
-automatically; use this script to regenerate the visualization on its own or
-with a different --num-samples."""
+predictions (flipped cases first, titled red). run_classification.py also
+produces this automatically; use this script to regenerate the visualization on
+its own or with a different --num-samples."""
 import argparse
 
 from vitquant.eval.qualitative import save_classification_qualitative
