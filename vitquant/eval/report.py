@@ -125,6 +125,20 @@ def sam_report(r: dict) -> str:
         parts.append(md_table(["Block", "IoU drop"],
                               [[k, f"{v:.4f}"] for k, v in r["sensitivity"].items()]))
 
+    if r.get("mixed_precision"):
+        parts.append(f"\n## Mixed-Precision Trade-off ({scheme} base, protected blocks kept FP32)\n")
+        parts.append("Protect the K most-sensitive blocks (kept FP32); quantize the rest at "
+                     f"{scheme}. Mean IoU is measured, not predicted from summed per-block "
+                     "drops. Compression is over quantizable weights only (protected = 32-bit).\n")
+        mp_rows = []
+        for row in r["mixed_precision"]:
+            prot = ", ".join(row["protected"]) or "(none — uniform)"
+            mp_rows.append([str(row["k"]), prot, f"{row['iou']:.4f}",
+                            f"{row['avg_weight_bits']:.2f}", f"{row['compression']:.2f}x"])
+        parts.append(md_table(
+            ["K protected", "Blocks kept FP32", "Mean IoU", "Avg weight bits", "Compression vs FP32"],
+            mp_rows))
+
     parts += ["\n## Scope\n",
               "Only the vision encoder (ViT backbone) is quantized. `prompt_encoder` "
               "and `mask_decoder` remain fp32 PyTorch."]

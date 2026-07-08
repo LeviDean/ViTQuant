@@ -15,7 +15,8 @@ from pathlib import Path
 from vitquant.data.sam_samples import build_sam_inputs
 from vitquant.eval.qualitative import save_sam_qualitative
 from vitquant.eval.report import sam_report, write_outputs
-from vitquant.eval.sam_evaluate import block_sensitivity_sam, evaluate_sam_consistency
+from vitquant.eval.sam_evaluate import (block_sensitivity_sam, evaluate_sam_consistency,
+                                        mixed_precision_sweep_sam)
 from vitquant.models.sam_loader import load_sam_model
 from vitquant.quant.qconfig import qconfig_from_dict
 from vitquant.quant.sam_calibrate import calibrate_sam
@@ -32,6 +33,10 @@ def main() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--skip-sensitivity", action="store_true",
                     help="skip the per-block (IoU) sensitivity sweep")
+    ap.add_argument("--skip-mixed-precision", action="store_true",
+                    help="skip the mixed-precision (top-K block protection) sweep")
+    ap.add_argument("--mixed-precision-ks", type=str, default=None,
+                    help="comma-separated K values for the sweep (default: 0,1,2,3,4 + full-fp32)")
     ap.add_argument("--no-qualitative", action="store_true",
                     help="skip the per-image mask visualization grid")
     ap.add_argument("--qualitative-samples", type=int, default=8)
@@ -79,6 +84,16 @@ def main() -> None:
         results["sensitivity"] = block_sensitivity_sam(
             quant_model, fp32_model, eval_samples, device,
             log=lambda msg: print(f"    [sensitivity] {msg}"))
+
+    # Mixed-precision sweep (needs the sensitivity ranking; reuses quant_model,
+    # which mixed_precision_sweep_sam restores to fully-quantizing on exit)
+    if not args.skip_mixed_precision and "sensitivity" in results:
+        ks = ([int(x) for x in args.mixed_precision_ks.split(",")]
+              if args.mixed_precision_ks else None)
+        print("Mixed-precision (top-K block protection) sweep ...")
+        results["mixed_precision"] = mixed_precision_sweep_sam(
+            quant_model, fp32_model, eval_samples, device, results["sensitivity"],
+            base_qc.weight.bits, ks=ks, log=lambda msg: print(f"    [mixed-prec] {msg}"))
 
     # Qualitative visualization examples (mask contour overlays)
     if not args.no_qualitative:

@@ -164,18 +164,21 @@ One command writes the metric report AND the visual examples to
   self-consistency IoU (`mean_iou`, `min_iou`, `per_sample_iou`), and per-block
   sensitivity.
 - `report.md` — a human-readable report (IoU table + theoretical weight
-  compression table + per-block sensitivity table), printed to stdout at the
-  end too.
+  compression table + per-block sensitivity table + mixed-precision trade-off
+  table), printed to stdout at the end too.
 - `qualitative_sam_grid.png` (+ `qualitative_sam.json`) — fp32 vs quantized
   mask contours over the actual images (point prompt marked), sorted
   worst-IoU-first, low-IoU cases titled red.
 
 The per-block sensitivity sweep quantizes one vision-encoder block at a time
 (`vision_encoder.layers.N` / `patch_embed` / `neck`) and reports how much the
-masks change, measured by self-consistency IoU drop (SAM has no top-1). It shares
-the sweep core with the classification pipeline — only the metric differs.
+masks change, measured by self-consistency IoU drop (SAM has no top-1). The
+mixed-precision sweep then protects the K most-sensitive blocks at FP32 and
+quantizes the rest, giving an IoU-vs-compression curve. Both share their sweep
+core with the classification pipeline — only the metric (IoU vs top-1) differs.
 
-Flags: `--skip-sensitivity`, `--no-qualitative`, `--qualitative-samples N`
+Flags: `--skip-sensitivity`, `--skip-mixed-precision`,
+`--mixed-precision-ks 0,1,2,3`, `--no-qualitative`, `--qualitative-samples N`
 (default 8). The standalone `scripts/qualitative_sam.py --config ...
 [--num-samples N]` regenerates just the grid.
 

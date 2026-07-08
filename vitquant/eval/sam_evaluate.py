@@ -3,7 +3,7 @@ from typing import Callable, Optional
 import torch
 from torch import nn
 
-from vitquant.eval.evaluate import block_sensitivity_scored
+from vitquant.eval.evaluate import block_sensitivity_scored, mixed_precision_scored
 
 MASK_THRESHOLD = 0.0  # matches SAM's own binarization convention
 
@@ -72,3 +72,22 @@ def block_sensitivity_sam(quant_model: nn.Module, fp32_model: nn.Module,
     def measure() -> float:
         return evaluate_sam_consistency(fp32_model, quant_model, samples, device)["mean_iou"]
     return block_sensitivity_scored(quant_model, measure, log)
+
+
+def mixed_precision_sweep_sam(quant_model: nn.Module, fp32_model: nn.Module,
+                              samples: list[dict], device: torch.device,
+                              sensitivity: dict, weight_bits: int,
+                              ks: Optional[list[int]] = None,
+                              log: Optional[Callable[[str], None]] = None) -> list[dict]:
+    """Mixed-precision sweep for the SAM vision encoder, scored by self-
+    consistency IoU. Protect the K most sensitive blocks (kept fp32) and quantize
+    the rest at `weight_bits`, sweeping K to give an IoU-vs-compression curve.
+    With every block protected (K=all) the quantized model reproduces fp32's
+    masks, so the IoU is 1.0. Shares the sweep core with the classification
+    pipeline via mixed_precision_scored — only the measure differs; rows carry an
+    "iou" score field. `quant_model` must be calibrated; restored to
+    fully-quantizing on exit."""
+    def measure() -> float:
+        return evaluate_sam_consistency(fp32_model, quant_model, samples, device)["mean_iou"]
+    return mixed_precision_scored(quant_model, sensitivity, weight_bits, measure,
+                                  score_key="iou", ks=ks, log=log)
