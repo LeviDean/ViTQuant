@@ -8,6 +8,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")  # headless-safe: servers have no display
 import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -140,10 +141,14 @@ def _sam_grid(results: list[dict], model_name: str, out_path: Path, cols: int = 
     axes = axes.flatten()
     for ax, r in zip(axes, results):
         ax.imshow(r["image"])
-        ax.contour(r["fp32_mask"].cpu().numpy().astype(float), levels=[0.5],
-                  colors="lime", linewidths=2)
+        # fp32 mask: semi-transparent filled overlay (the "before" reference)
+        fp32 = r["fp32_mask"].cpu().numpy().astype(bool)
+        overlay = np.zeros((*fp32.shape, 4), dtype=float)
+        overlay[fp32] = (0.20, 0.95, 0.20, 0.35)  # translucent lime fill
+        ax.imshow(overlay)
+        # quantized mask: thin boundary line (the "after", easy to compare against fill)
         ax.contour(r["quant_mask"].cpu().numpy().astype(float), levels=[0.5],
-                  colors="magenta", linewidths=2, linestyles="dashed")
+                  colors="magenta", linewidths=1.0)
         px, py = r["point"]
         ax.scatter([px], [py], marker="*", s=200, c="yellow", edgecolors="black", linewidths=1)
         ax.axis("off")
@@ -153,7 +158,7 @@ def _sam_grid(results: list[dict], model_name: str, out_path: Path, cols: int = 
     for ax in axes[n:]:
         ax.axis("off")
     fig.suptitle(f"SAM qualitative: {model_name}\n"
-                f"lime = fp32 mask, magenta dashed = quantized mask, "
+                f"lime translucent fill = fp32 mask, magenta line = quantized boundary, "
                 f"star = point prompt, sorted worst-IoU-first", fontsize=10, y=0.99)
     # Fixed inch-based top margin so the two-line suptitle never collides with
     # row-0 subplot titles regardless of grid size.
