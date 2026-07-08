@@ -67,8 +67,8 @@ embedding）、attention 内部两次矩阵乘（q@k^T、attn@v）；分类头 `
 ## 4. 实验流程与每类实验的设置
 
 一次 `run_classification.py`（分类）或 `run_sam.py`（SAM）按顺序做下面几类实验，全部在同一份权重
-和同一批校准/评估样本上进行，保证组间可比（SAM 目前只覆盖 4.1/4.2/4.7，敏感度与混合精度是分类
-专属）：
+和同一批校准/评估样本上进行，保证组间可比（SAM 覆盖 4.1/4.2/4.3/4.7；混合精度 4.4 与消融 4.5
+目前是分类专属）：
 
 ### 4.1 fp32 基线
 
@@ -97,6 +97,12 @@ embedding）、attention 内部两次矩阵乘（q@k^T、attn@v）；分类头 `
 
 `try/finally` 保证即使扫描中途抛异常，模型也会被强制恢复为全量化状态，不会因为异常残留半量化
 的脏状态污染后续实验。
+
+**SAM 版（`block_sensitivity_sam`）**：完全相同的逐块扫描流程，只把"衡量的尺子"从 top-1 换成
+自一致性 IoU——SAM 没有分类精度。每次只量化 vision encoder 的一个 block（`vision_encoder.layers.N`、
+`patch_embed`、`neck`），测量化后 mask 与全 fp32 mask 的平均 IoU，敏感度 = `1.0 − IoU`（全 fp32
+时量化模型复现 fp32 的 mask，IoU 恒为 1.0，天然是基线）。分类与 SAM 共用同一套扫描核心
+（`block_sensitivity_scored`），差异只在传入的评估函数——这是"泛化 + 薄封装"的又一处应用。
 
 ### 4.4 混合精度权衡扫描（Mixed-Precision Sweep）
 

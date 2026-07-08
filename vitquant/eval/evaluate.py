@@ -35,10 +35,19 @@ def evaluate_torch(model: nn.Module, loader: DataLoader, class_indices: list[int
 
 
 def _group_key(name: str) -> str:
-    """Map a module/quantizer name to its block group: "blocks.N" for anything
-    under a transformer block, else the top-level component (e.g. patch_embed)."""
+    """Map a quantizer/module name to its per-block sensitivity group, for both
+    naming schemes: timm ViT ("blocks.N.*") and HF SAM vision encoder
+    ("vision_encoder.layers.N.*"). A transformer block groups by the path through
+    its index; everything else (patch embed, SAM neck) groups by its owning
+    component (drop the leaf module + the fq buffer name).
+
+    Classification names collapse to the same keys as before — "blocks.N" and
+    "patch_embed" — so classification grouping is unchanged."""
     parts = name.split(".")
-    return ".".join(parts[:2]) if parts[0] == "blocks" else parts[0]
+    for i in range(len(parts) - 1):
+        if parts[i] in ("blocks", "layers") and parts[i + 1].isdigit():
+            return ".".join(parts[: i + 2])
+    return ".".join(parts[:-2]) if len(parts) > 2 else parts[0]
 
 
 def _fq_groups(model: nn.Module) -> dict[str, list[FakeQuantize]]:
@@ -119,30 +128,47 @@ def mixed_precision_sweep(
     return rows
 
 
-def block_sensitivity(model: nn.Module, loader: DataLoader, class_indices: list[int],
-                      device: torch.device, max_batches: Optional[int] = None,
-                      log: Optional[Callable[[str], None]] = None) -> dict:
-    """Quantize one block at a time (rest fp32); report top-1 drop vs full fp32.
-    Returns {group_name: top1_drop} sorted most-sensitive first.
-    Requires a calibrated model; leaves it fully quantizing afterwards.
-    If log is given, it's called with a status line before each group's pass —
-    this sweep runs len(groups)+1 full evaluation passes and can take a while."""
+def block_sensitivity_scored(model: nn.Module, measure: Callable[[], float],
+                             log: Optional[Callable[[str], None]] = None) -> dict:
+    """Task-agnostic per-block sensitivity core. Quantize one block at a time
+    (rest fp32) and report each block's score drop vs the all-fp32 baseline.
+
+    `measure()` returns a scalar score (higher is better) for the model in its
+    current quantizing state — top-1 accuracy for classification, self-
+    consistency IoU for SAM. The sweep only toggles which block is quantized;
+    the metric is entirely `measure`'s concern, so classification and SAM share
+    this one implementation.
+
+    Returns {group_name: score_drop} sorted most-sensitive first. Requires a
+    calibrated model; restores full quantization on exit. If log is given it's
+    called before each group's pass — the sweep runs len(groups)+1 measurement
+    passes and can take a while."""
     groups = _fq_groups(model)
     try:
         set_quantizing(model, False)
         if log is not None:
             log("baseline (all fp32)")
-        base = evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
+        base = measure()
         drops = {}
         for i, (key, fqs) in enumerate(groups.items(), 1):
             if log is not None:
                 log(f"group {i}/{len(groups)}: {key}")
             for m in fqs:
                 m.quantizing = True
-            acc = evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
-            drops[key] = base - acc
+            drops[key] = base - measure()
             for m in fqs:
                 m.quantizing = False
     finally:
         set_quantizing(model, True)  # never leave the model half-quantized
     return dict(sorted(drops.items(), key=lambda kv: -kv[1]))
+
+
+def block_sensitivity(model: nn.Module, loader: DataLoader, class_indices: list[int],
+                      device: torch.device, max_batches: Optional[int] = None,
+                      log: Optional[Callable[[str], None]] = None) -> dict:
+    """Classification per-block sensitivity: top-1 drop when only that block is
+    quantized (rest fp32), sorted most-sensitive first. Thin wrapper over
+    block_sensitivity_scored with a top-1 measure."""
+    def measure() -> float:
+        return evaluate_torch(model, loader, class_indices, device, max_batches)["top1"]
+    return block_sensitivity_scored(model, measure, log)

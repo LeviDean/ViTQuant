@@ -15,7 +15,7 @@ from pathlib import Path
 from vitquant.data.sam_samples import build_sam_inputs
 from vitquant.eval.qualitative import save_sam_qualitative
 from vitquant.eval.report import sam_report, write_outputs
-from vitquant.eval.sam_evaluate import evaluate_sam_consistency
+from vitquant.eval.sam_evaluate import block_sensitivity_sam, evaluate_sam_consistency
 from vitquant.models.sam_loader import load_sam_model
 from vitquant.quant.qconfig import qconfig_from_dict
 from vitquant.quant.sam_calibrate import calibrate_sam
@@ -30,6 +30,8 @@ sys.stdout.reconfigure(line_buffering=True)
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
+    ap.add_argument("--skip-sensitivity", action="store_true",
+                    help="skip the per-block (IoU) sensitivity sweep")
     ap.add_argument("--no-qualitative", action="store_true",
                     help="skip the per-image mask visualization grid")
     ap.add_argument("--qualitative-samples", type=int, default=8)
@@ -69,6 +71,14 @@ def main() -> None:
         "activation_bits": base_qc.activation.bits,
         "iou_simulated": sim_result,
     }
+
+    # Per-block sensitivity (IoU): quantize one vision-encoder block at a time,
+    # measure how much the masks change vs full fp32. Restores full quant on exit.
+    if not args.skip_sensitivity:
+        print("Per-block (IoU) sensitivity sweep ...")
+        results["sensitivity"] = block_sensitivity_sam(
+            quant_model, fp32_model, eval_samples, device,
+            log=lambda msg: print(f"    [sensitivity] {msg}"))
 
     # Qualitative visualization examples (mask contour overlays)
     if not args.no_qualitative:

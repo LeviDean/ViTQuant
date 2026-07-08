@@ -115,8 +115,17 @@ def sam_report(r: dict) -> str:
              "\nHigh IoU means quantization barely changed the predicted masks vs "
              "the fp32 model. These are self-consistency scores (fp32 vs quantized "
              "on the same inputs), not ground-truth mIoU against a labeled benchmark.",
-             "\n" + theoretical_compression_section(wbits),
-             "\n## Scope\n",
-             "Only the vision encoder (ViT backbone) is quantized. `prompt_encoder` "
-             "and `mask_decoder` remain fp32 PyTorch."]
+             "\n" + theoretical_compression_section(wbits)]
+
+    if "sensitivity" in r:
+        parts.append("\n## Per-Block Sensitivity (self-consistency IoU drop when only "
+                     "that block is quantized)\n")
+        parts.append("Bigger drop = quantizing that vision-encoder block changes the "
+                     "masks more (drop = 1.0 − mean IoU vs full fp32).\n")
+        parts.append(md_table(["Block", "IoU drop"],
+                              [[k, f"{v:.4f}"] for k, v in r["sensitivity"].items()]))
+
+    parts += ["\n## Scope\n",
+              "Only the vision encoder (ViT backbone) is quantized. `prompt_encoder` "
+              "and `mask_decoder` remain fp32 PyTorch."]
     return "\n".join(parts) + "\n"

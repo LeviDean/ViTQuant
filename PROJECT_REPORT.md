@@ -95,7 +95,8 @@ dq = (q - zero_point) * scale
 ### 3.2 评估循环（`evaluate.py`）
 
 - `evaluate_torch()`：PyTorch 模型评估，把 1000 类 logits 切到 Imagenette 对应的 10 个类别索引上再算 top-1/top-5
-- `block_sensitivity()`：逐块敏感度分析——先测全 fp32 基线，然后每次只让一个 block（`patch_embed`、`blocks.0`……`blocks.11`）量化、其余保持 fp32，测量精度下降幅度，按下降程度从高到低排序。用 `try/finally` 保证扫描过程中即使抛异常，模型也会被恢复成完全量化状态，不会留下半量化的脏状态。
+- `block_sensitivity_scored()`：逐块敏感度分析的**任务无关核心**——先测全 fp32 基线分数，然后每次只让一个 block 量化、其余保持 fp32，测分数下降幅度，按下降程度从高到低排序。分数由传入的 `measure()` 回调提供（分数越高越好），扫描本身只负责逐块开关量化，与用什么指标无关。用 `try/finally` 保证扫描过程中即使抛异常，模型也会被恢复成完全量化状态，不会留下半量化的脏状态。
+- `block_sensitivity()`：分类的薄封装——`measure` 用 top-1（`patch_embed`、`blocks.0`……`blocks.11`）。SAM 版 `block_sensitivity_sam()`（在 `sam_evaluate.py`）用自一致性 IoU 作 `measure`，逐块测 `vision_encoder.layers.N`/`patch_embed`/`neck`。`_group_key()` 同时识别 timm 的 `blocks.N` 和 HF SAM 的 `vision_encoder.layers.N` 两种命名，所以分组逻辑两条线通用。
 
 两个函数都支持可选的 `progress` 回调（每完成约 20% 的 batch 打一行状态），`block_sensitivity` 额外支持 `log` 回调汇报当前扫到第几个 block——这是服务器上跑长时间任务时避免"看起来像卡住"而加的。
 
@@ -127,7 +128,7 @@ dq = (q - zero_point) * scale
   5. 消融实验矩阵：默认方案 vs 权重逐张量 vs 激活对称 vs 不同 Observer（可跳过，`--skip-ablation`）
 
   产出 `results.json`（结构化数据）和 `report.md`（人类可读的 Markdown 报告，含精度对比表、**理论**体积压缩表——纯粹由位宽算出的算术比值、敏感度排名表、混合精度权衡表、消融矩阵表）。混合精度表里每一行的 top-1 都是真实评估的，不是把单块敏感度相加预测的——量化误差跨 block 非线性叠加，排名只用来决定优先保护谁。
-- `run_sam.py`：SAM 研究流水线——模拟量化 vision encoder，评估 fp32 vs 量化 mask 的自一致性 IoU，产出 `results.json` 和 `report.md`（IoU 表 + 理论压缩表）
+- `run_sam.py`：SAM 研究流水线——模拟量化 vision encoder，评估 fp32 vs 量化 mask 的自一致性 IoU，逐块（IoU）敏感度扫描（可跳过，`--skip-sensitivity`），产出 `results.json` 和 `report.md`（IoU 表 + 理论压缩表 + 逐块敏感度表）
 - `qualitative_sam.py`：SAM 逐样本 mask 轮廓可视化（fp32 vs 模拟量化），按 IoU 从低到高排序，产出 `qualitative_sam_grid.png` 和 `qualitative_sam.json`
 
 `run_classification.py` 和 `run_sam.py` 保持薄编排，两条流水线的公共部分抽到库里复用，脚本只负责各自任务特有的数据/模型/指标：

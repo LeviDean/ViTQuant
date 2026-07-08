@@ -1,5 +1,9 @@
+from typing import Callable, Optional
+
 import torch
 from torch import nn
+
+from vitquant.eval.evaluate import block_sensitivity_scored
 
 MASK_THRESHOLD = 0.0  # matches SAM's own binarization convention
 
@@ -48,3 +52,23 @@ def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
         "mean_iou": sum(all_ious) / len(all_ious),
         "min_iou": min(all_ious),
     }
+
+
+def block_sensitivity_sam(quant_model: nn.Module, fp32_model: nn.Module,
+                          samples: list[dict], device: torch.device,
+                          log: Optional[Callable[[str], None]] = None) -> dict:
+    """Per-block sensitivity for the SAM vision encoder, measured by
+    self-consistency IoU instead of top-1 (SAM has no classification accuracy).
+    Quantize one vision-encoder block at a time (rest fp32) and report the mean
+    self-consistency IoU drop vs the all-fp32 baseline — a bigger drop means that
+    block's quantization changes the predicted masks more, i.e. it's more
+    sensitive. Blocks sorted most-sensitive first.
+
+    With every quantizer off, the "quantized" model reproduces fp32's masks
+    exactly, so the baseline IoU is 1.0; each block's drop is 1.0 minus its IoU.
+    Shares the sweep implementation with the classification pipeline via
+    block_sensitivity_scored — only the measure differs. `quant_model` must be
+    calibrated; it's restored to fully-quantizing on exit."""
+    def measure() -> float:
+        return evaluate_sam_consistency(fp32_model, quant_model, samples, device)["mean_iou"]
+    return block_sensitivity_scored(quant_model, measure, log)
