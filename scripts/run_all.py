@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 """One-command research-layer evaluation: fp32 baseline, simulated INT8
-(fake-quant) accuracy, per-block sensitivity, and a quantization-scheme
-ablation matrix, plus a markdown report. Simulated quantization measures the
-accuracy impact of a scheme (device-independent); it does not run a real int8
-kernel. The theoretical compression ratio is reported from the weight
-bit-width (int8 weights are 1/4 of fp32)."""
+(fake-quant) accuracy, per-block sensitivity, a mixed-precision (top-K block
+protection) trade-off sweep, and a quantization-scheme ablation matrix, plus a
+markdown report. Simulated quantization measures the accuracy impact of a scheme
+(device-independent); it does not run a real int8 kernel. The theoretical
+compression ratio is reported from the weight bit-width (int8 weights are 1/4 of
+fp32)."""
 import argparse
 import json
 import sys
@@ -13,7 +14,8 @@ from pathlib import Path
 
 from vitquant.data.imagenette import (IMAGENETTE_TO_IMAGENET1K, build_calib_loader,
                                       build_val_loader)
-from vitquant.eval.evaluate import block_sensitivity, evaluate_torch
+from vitquant.eval.evaluate import (block_sensitivity, evaluate_torch,
+                                    mixed_precision_sweep)
 from vitquant.eval.qualitative import save_classification_qualitative
 from vitquant.models.loader import load_model
 from vitquant.quant.calibrate import calibrate
@@ -72,6 +74,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
     ap.add_argument("--skip-sensitivity", action="store_true")
+    ap.add_argument("--skip-mixed-precision", action="store_true",
+                    help="skip the mixed-precision (top-K block protection) sweep")
+    ap.add_argument("--mixed-precision-ks", type=str, default=None,
+                    help="comma-separated K values for the sweep (default: 0,1,2,3,4 + full-fp32)")
     ap.add_argument("--skip-ablation", action="store_true")
     ap.add_argument("--no-qualitative", action="store_true",
                     help="skip the per-image visualization grid")
@@ -101,31 +107,45 @@ def main() -> None:
     n_calib = len(calib)  # calibrate() has no max_batches limit in this pipeline
 
     # 1. fp32 torch baseline
-    print(f"[1/5] fp32 baseline on {device} ({n_val} batches)")
+    print(f"[1/6] fp32 baseline on {device} ({n_val} batches)")
     results["fp32_torch"] = evaluate_torch(model, val, CLS, device, max_b,
                                            progress=_progress("fp32", n_val))
 
     # 2. simulated INT8 (research layer)
-    print(f"[2/5] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
+    print(f"[2/6] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
     qmodel = convert_vit(model, base_qc)
     calibrate(qmodel, calib, device, progress=_calib_progress("calib", n_calib))
-    print(f"[2/5] simulated INT8: evaluating ({n_val} batches)")
+    print(f"[2/6] simulated INT8: evaluating ({n_val} batches)")
     results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
                                                progress=_progress("int8 sim", n_val))
 
     # 3. block sensitivity (len(groups)+1 full eval passes — can take a while)
     if not args.skip_sensitivity:
-        print("[3/5] per-block sensitivity sweep")
+        print("[3/6] per-block sensitivity sweep")
         results["sensitivity"] = block_sensitivity(
             qmodel, val, CLS, device, max_b,
             log=lambda msg: print(f"    [sensitivity] {msg}"))
     else:
-        print("[3/5] skipped")
+        print("[3/6] skipped")
 
-    # 4. ablation matrix (each variant needs a fresh model: weights were shared in-place)
+    # 4. mixed-precision sweep (needs the sensitivity ranking; reuses qmodel,
+    # which mixed_precision_sweep restores to fully-quantizing on exit)
+    if not args.skip_mixed_precision and "sensitivity" in results:
+        ks = ([int(x) for x in args.mixed_precision_ks.split(",")]
+              if args.mixed_precision_ks else None)
+        print("[4/6] mixed-precision (top-K block protection) sweep")
+        results["mixed_precision"] = mixed_precision_sweep(
+            qmodel, results["sensitivity"], val, CLS, device, base_qc.weight.bits,
+            max_b, ks=ks, log=lambda msg: print(f"    [mixed-prec] {msg}"))
+    elif args.skip_mixed_precision:
+        print("[4/6] skipped")
+    else:
+        print("[4/6] skipped (needs sensitivity ranking; --skip-sensitivity was set)")
+
+    # 5. ablation matrix (each variant needs a fresh model: weights were shared in-place)
     if not args.skip_ablation:
         variants = ablation_qconfigs(base_qc)
-        print(f"[4/5] ablation matrix ({len(variants)} variants)")
+        print(f"[5/6] ablation matrix ({len(variants)} variants)")
         results["ablation"] = {}
         for i, (label, qc) in enumerate(variants.items(), 1):
             print(f"    variant {i}/{len(variants)}: {label}")
@@ -136,19 +156,19 @@ def main() -> None:
                 qm, val, CLS, device, max_b, progress=_progress(f"variant {i}", n_val))
             print(f"    {label}: top1={results['ablation'][label]['top1']:.4f}")
     else:
-        print("[4/5] skipped")
+        print("[5/6] skipped")
 
-    # 5. qualitative visualization examples (fresh fp32 model — convert_vit
+    # 6. qualitative visualization examples (fresh fp32 model — convert_vit
     # mutated the original in place at step 2; qmodel is the calibrated one)
     if not args.no_qualitative:
-        print(f"[5/5] qualitative visualization ({args.qualitative_samples} samples)")
+        print(f"[6/6] qualitative visualization ({args.qualitative_samples} samples)")
         fp32_fresh, _ = load_model(name, ckpt)
         grid = save_classification_qualitative(
             fp32_fresh, qmodel, data_cfg, d["root"], args.qualitative_samples,
             device, out, name, download=d["download"])
         results["qualitative_grid"] = str(grid)
     else:
-        print("[5/5] skipped")
+        print("[6/6] skipped")
 
     (out / "results.json").write_text(json.dumps(results, indent=2))
     report = build_report(results)
@@ -185,6 +205,20 @@ def build_report(r: dict) -> str:
         parts.append("\n## Per-Block Sensitivity (top-1 drop when only that block is quantized)\n")
         parts.append(md_table(["Block", "Top-1 drop"],
                               [[k, pct(v)] for k, v in r["sensitivity"].items()]))
+
+    if r.get("mixed_precision"):
+        parts.append(f"\n## Mixed-Precision Trade-off ({scheme} base, protected blocks kept FP32)\n")
+        parts.append("Protect the K most-sensitive blocks (kept FP32); quantize the rest at "
+                     f"{scheme}. Top-1 is measured, not predicted from summed per-block drops. "
+                     "Compression is over quantizable weights only (protected = 32-bit).\n")
+        mp_rows = []
+        for row in r["mixed_precision"]:
+            prot = ", ".join(row["protected"]) or "(none — uniform)"
+            mp_rows.append([str(row["k"]), prot, pct(row["top1"]),
+                            f"{row['avg_weight_bits']:.2f}", f"{row['compression']:.2f}x"])
+        parts.append(md_table(
+            ["K protected", "Blocks kept FP32", "Top-1", "Avg weight bits", "Compression vs FP32"],
+            mp_rows))
 
     if "ablation" in r:
         parts.append("\n## Ablation (simulated INT8)\n")

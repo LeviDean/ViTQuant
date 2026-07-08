@@ -123,9 +123,10 @@ dq = (q - zero_point) * scale
   1. fp32 torch 基线
   2. 研究层模拟 INT8（转换 + 校准 + 评估）
   3. 逐块敏感度扫描（可跳过，`--skip-sensitivity`）
-  4. 消融实验矩阵：默认方案 vs 权重逐张量 vs 激活对称 vs 不同 Observer（可跳过，`--skip-ablation`）
+  4. 混合精度权衡扫描：按敏感度排名保护最敏感的 K 个 block（保留 fp32）、其余量化，扫 K 得到精度 vs 压缩率曲线（可跳过，`--skip-mixed-precision`；`--mixed-precision-ks` 指定 K 列表；依赖敏感度排名，`--skip-sensitivity` 时自动跳过）
+  5. 消融实验矩阵：默认方案 vs 权重逐张量 vs 激活对称 vs 不同 Observer（可跳过，`--skip-ablation`）
 
-  产出 `results.json`（结构化数据）和 `report.md`（人类可读的 Markdown 报告，含精度对比表、**理论**体积压缩表——纯粹由位宽算出的算术比值、敏感度排名表、消融矩阵表）。
+  产出 `results.json`（结构化数据）和 `report.md`（人类可读的 Markdown 报告，含精度对比表、**理论**体积压缩表——纯粹由位宽算出的算术比值、敏感度排名表、混合精度权衡表、消融矩阵表）。混合精度表里每一行的 top-1 都是真实评估的，不是把单块敏感度相加预测的——量化误差跨 block 非线性叠加，排名只用来决定优先保护谁。
 - `quantize_sam.py`：SAM 研究流水线——模拟量化 vision encoder，评估 fp32 vs 量化 mask 的自一致性 IoU，产出 `results.json` 和 `report.md`（IoU 表 + 理论压缩表）
 - `qualitative_sam.py`：SAM 逐样本 mask 轮廓可视化（fp32 vs 模拟量化），按 IoU 从低到高排序，产出 `qualitative_sam_grid.png` 和 `qualitative_sam.json`
 

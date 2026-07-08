@@ -77,15 +77,26 @@ python scripts/run_all.py --config configs/vit_base.yaml
 ```
 
 `run_all.py` runs the fp32 baseline, simulated INT8 accuracy, per-block
-sensitivity, a quantization-scheme ablation matrix, the theoretical weight
-compression ratio (arithmetic, from bit-width), AND a per-image visualization
-grid — one command gives you the metric report and the visual examples
-together. Flags: `--skip-sensitivity`, `--skip-ablation`, `--no-qualitative`,
-`--qualitative-samples N` (default 30). Outputs land in `outputs/<model>/`:
-`report.md` (accuracy / theoretical-compression / sensitivity / ablation
-tables), `results.json`, and `qualitative_grid.png` (the actual sample photos
-with fp32-vs-quantized predictions annotated, flipped cases sorted first and
-titled red) plus `qualitative.json`/`.md`.
+sensitivity, a mixed-precision (top-K block protection) trade-off sweep, a
+quantization-scheme ablation matrix, the theoretical weight compression ratio
+(arithmetic, from bit-width), AND a per-image visualization grid — one command
+gives you the metric report and the visual examples together. Flags:
+`--skip-sensitivity`, `--skip-mixed-precision`, `--mixed-precision-ks 0,1,2,3`,
+`--skip-ablation`, `--no-qualitative`, `--qualitative-samples N` (default 30).
+Outputs land in `outputs/<model>/`: `report.md` (accuracy /
+theoretical-compression / sensitivity / mixed-precision / ablation tables),
+`results.json`, and `qualitative_grid.png` (the actual sample photos with
+fp32-vs-quantized predictions annotated, flipped cases sorted first and titled
+red) plus `qualitative.json`/`.md`.
+
+The mixed-precision sweep turns the sensitivity ranking into deployable plans:
+it keeps the K most-sensitive blocks at FP32 and quantizes the rest at the
+config's bit-width, measuring each K to produce an accuracy-vs-compression
+curve. Each row's top-1 is measured, not predicted from summing per-block drops
+(quantization error across blocks is not additive). It needs the sensitivity
+ranking, so it's skipped when `--skip-sensitivity` is set, and it's only
+meaningful at low bit-width (e.g. `configs/deit_tiny_w4a8.yaml`) — at W8A8 every
+block is insensitive and the curve is flat.
 
 Single experiments: `scripts/quantize.py --config ...` (one simulated INT8
 experiment: convert -> calibrate -> evaluate, writes `quantize_result.json`),
