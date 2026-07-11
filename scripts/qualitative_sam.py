@@ -19,11 +19,16 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", required=True)
     ap.add_argument("--num-samples", type=int, default=8)
+    ap.add_argument("--prompt-grid", type=int, default=None,
+                    help="n: use an n×n grid of point prompts per image instead of "
+                         "the single center point (overrides data.prompt_grid in the config)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     device = resolve_device(cfg["device"])
     d = cfg["data"]
+    prompt_grid = (args.prompt_grid if args.prompt_grid is not None
+                   else d.get("prompt_grid", 1))
 
     print(f"Loading checkpoint {cfg['model']['checkpoint']} ...")
     fp32_model, processor = load_sam_model(cfg["model"]["name"], cfg["model"]["checkpoint"])
@@ -34,10 +39,12 @@ def main() -> None:
     convert_sam_vision_encoder(quant_model, qconfig_from_dict(cfg["quant"]))
     calibrate_sam(quant_model, calib_samples, device)
 
-    print(f"Building {args.num_samples} qualitative samples ...")
+    print(f"Building {args.num_samples} qualitative samples "
+         f"({prompt_grid}x{prompt_grid} prompt grid) ...")
     grid = save_sam_qualitative(
         fp32_model, quant_model, processor, d["root"], args.num_samples, device,
-        cfg["output_dir"], cfg["model"]["name"], download=d["download"])
+        cfg["output_dir"], cfg["model"]["name"], download=d["download"],
+        grid=prompt_grid)
     print(f"Wrote {grid} (+ qualitative_sam.json alongside)")
 
 

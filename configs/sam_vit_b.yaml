@@ -9,6 +9,8 @@ data:
   download: true          # set false on offline servers with data pre-copied
   calib_samples: 16       # small default for a first run; raise to ~64-128 for a production pass
   eval_samples: 16
+  prompt_grid: 4          # n×n grid of point prompts per eval image (1 = single center point);
+                          # a grid measures quantization's effect across the whole image
 
 quant:
   weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}

@@ -20,15 +20,18 @@ def mask_iou(a: torch.Tensor, b: torch.Tensor) -> float:
 def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
                              samples: list[dict], device: torch.device) -> dict:
     """Self-consistency check (no ground truth needed): for the same
-    image+prompt, compare fp32 vs quantized-vision-encoder predicted masks
-    via IoU, per mask hypothesis. High IoU means quantization didn't change
-    what the model segments. IoU is computed on SAM's native low-res mask
-    logits (not upsampled to original image resolution) — a same-basis
-    comparison between the two models on one run, not a substitute for
-    full-resolution mIoU against ground truth. mean_iou/min_iou aggregate
-    equally across every (sample, mask hypothesis) pair, not weighted per
-    image. Returns {"per_sample_iou": [[iou_per_mask], ...], "mean_iou":
-    float, "min_iou": float}."""
+    image+prompts, compare fp32 vs quantized-vision-encoder predicted masks
+    via IoU, per (point prompt, mask hypothesis) pair. Samples may carry a
+    single point or an n×n grid of points (see build_sam_inputs `grid`) — a
+    grid covers objects across the whole image instead of only the center one,
+    while the quantized vision encoder still runs once per image. High IoU
+    means quantization didn't change what the model segments. IoU is computed
+    on SAM's native low-res mask logits (not upsampled to original image
+    resolution) — a same-basis comparison between the two models on one run,
+    not a substitute for full-resolution mIoU against ground truth.
+    mean_iou/min_iou aggregate equally across every (sample, point, mask
+    hypothesis) triple, not weighted per image. Returns {"per_sample_iou":
+    [[iou_per_point_and_mask], ...], "mean_iou": float, "min_iou": float}."""
     assert samples, "evaluate_sam_consistency: samples is empty"
     fp32_model = fp32_model.eval().to(device)
     quant_model = quant_model.eval().to(device)
@@ -39,11 +42,12 @@ def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
         inputs = {k: v.to(device) for k, v in inputs.items()}
         fp32_masks = fp32_model(**inputs).pred_masks > MASK_THRESHOLD
         quant_masks = quant_model(**inputs).pred_masks > MASK_THRESHOLD
-        assert fp32_masks.shape[0] == 1 and fp32_masks.shape[1] == 1, (
-            "evaluate_sam_consistency assumes batch_size=1 and a single "
-            "point-prompt-group per sample (matches build_sam_inputs)")
-        num_masks = fp32_masks.shape[2]
-        ious = [mask_iou(fp32_masks[0, 0, m], quant_masks[0, 0, m]) for m in range(num_masks)]
+        assert fp32_masks.shape[0] == 1, (
+            "evaluate_sam_consistency assumes batch_size=1 per sample "
+            "(matches build_sam_inputs)")
+        num_points, num_masks = fp32_masks.shape[1], fp32_masks.shape[2]
+        ious = [mask_iou(fp32_masks[0, p, m], quant_masks[0, p, m])
+                for p in range(num_points) for m in range(num_masks)]
         per_sample.append(ious)
         all_ious.extend(ious)
 

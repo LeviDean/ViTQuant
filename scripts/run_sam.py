@@ -40,22 +40,33 @@ def main() -> None:
     ap.add_argument("--no-qualitative", action="store_true",
                     help="skip the per-image mask visualization grid")
     ap.add_argument("--qualitative-samples", type=int, default=8)
+    ap.add_argument("--prompt-grid", type=int, default=None,
+                    help="n: use an n×n grid of point prompts per eval image instead of "
+                         "the single center point (overrides data.prompt_grid in the config)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     device = resolve_device(cfg["device"])
     d = cfg["data"]
     base_qc = qconfig_from_dict(cfg["quant"])
+    # n×n grid of point prompts per eval image (1 = single center point).
+    # Covers objects across the whole image, so the IoU measures quantization's
+    # effect on segmenting everything, not just the center object.
+    grid = args.prompt_grid if args.prompt_grid is not None else d.get("prompt_grid", 1)
 
     print(f"Loading checkpoint {cfg['model']['checkpoint']} ...")
     fp32_model, processor = load_sam_model(cfg["model"]["name"], cfg["model"]["checkpoint"])
 
+    # Calibration keeps the single center prompt: only the vision encoder is
+    # quantized and its activations don't depend on the prompt points, so a
+    # grid would add decoder compute without changing calibration statistics.
     print(f"Building {d['calib_samples']} calibration samples ...")
     calib_samples = build_sam_inputs(d["root"], processor, d["calib_samples"],
                                      seed=0, download=d["download"])
-    print(f"Building {d['eval_samples']} evaluation samples ...")
+    print(f"Building {d['eval_samples']} evaluation samples "
+         f"({grid}x{grid} prompt grid) ...")
     eval_samples = build_sam_inputs(d["root"], processor, d["eval_samples"],
-                                    seed=1, download=d["download"])
+                                    seed=1, download=d["download"], grid=grid)
 
     print("Converting + calibrating quantized vision encoder ...")
     quant_model, _ = load_sam_model(cfg["model"]["name"], cfg["model"]["checkpoint"])
@@ -74,6 +85,7 @@ def main() -> None:
         "device": str(device),
         "weight_bits": base_qc.weight.bits,
         "activation_bits": base_qc.activation.bits,
+        "prompt_grid": grid,
         "iou_simulated": sim_result,
     }
 
@@ -99,10 +111,10 @@ def main() -> None:
     if not args.no_qualitative:
         print(f"\nGenerating qualitative mask visualization "
              f"({args.qualitative_samples} samples) ...")
-        grid = save_sam_qualitative(
+        grid_png = save_sam_qualitative(
             fp32_model, quant_model, processor, d["root"], args.qualitative_samples,
-            device, out, cfg["model"]["name"], download=d["download"])
-        results["qualitative_grid"] = str(grid)
+            device, out, cfg["model"]["name"], download=d["download"], grid=grid)
+        results["qualitative_grid"] = str(grid_png)
 
     note = f", and {out / 'qualitative_sam_grid.png'}" if not args.no_qualitative else ""
     write_outputs(out, results, sam_report(results), note)

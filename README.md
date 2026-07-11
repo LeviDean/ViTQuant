@@ -132,12 +132,16 @@ the **image encoder (ViT backbone)** of Segment Anything (SAM), via
 HuggingFace `transformers.SamModel`. Only `model.vision_encoder` is converted
 to simulated INT8 — `prompt_encoder` and `mask_decoder` stay fp32. Since SAM
 has no single "top-1 accuracy" metric, evaluation instead measures
-**self-consistency**: for the same image + point prompt, how similar are the
+**self-consistency**: for the same image + point prompts, how similar are the
 fp32 model's predicted masks to the simulated-quantized model's predicted
-masks (IoU, per mask hypothesis)? High IoU means quantization didn't change
-what the model segments. This is **not** a ground-truth accuracy benchmark
-(e.g. mIoU against COCO) — that's a deliberate scope decision, not an
-oversight.
+masks (IoU, per point and mask hypothesis)? By default each eval image gets an
+n×n **grid of point prompts** (`data.prompt_grid`, default 4×4; 1 = single
+center point), so the IoU measures quantization's effect on segmenting objects
+across the whole image, not just the center one — the quantized vision encoder
+still runs once per image, only the light fp32 prompt-encoder/mask-decoder
+repeat per point. High IoU means quantization didn't change what the model
+segments. This is **not** a ground-truth accuracy benchmark (e.g. mIoU against
+COCO) — that's a deliberate scope decision, not an oversight.
 
 ### Weights (manual, offline)
 
@@ -169,9 +173,10 @@ One command writes the metric report AND the visual examples to
 - `report.md` — a human-readable report (IoU table + theoretical weight
   compression table + per-block sensitivity table + mixed-precision trade-off
   table), printed to stdout at the end too.
-- `qualitative_sam_grid.png` (+ `qualitative_sam.json`) — fp32 vs quantized
-  mask contours over the actual images (point prompt marked), sorted
-  worst-IoU-first, low-IoU cases titled red.
+- `qualitative_sam_grid.png` (+ `qualitative_sam.json`) — fp32 masks
+  (translucent fills) vs quantized masks (thin boundary lines) over the actual
+  images (prompt points marked; in grid mode each point gets its own color),
+  sorted worst-IoU-first, low-IoU cases titled red.
 
 The per-block sensitivity sweep quantizes one vision-encoder block at a time
 (`vision_encoder.layers.N` / `patch_embed` / `neck`) and reports how much the

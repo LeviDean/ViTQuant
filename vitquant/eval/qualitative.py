@@ -133,33 +133,66 @@ def save_classification_qualitative(fp32_model, qmodel, data_cfg: dict, root,
 
 # --------------------------------- SAM ------------------------------------
 
+def _draw_sam_single_point(ax, r: dict) -> None:
+    """Single-point style: fp32 mask as translucent lime fill, quantized mask
+    as a thin magenta boundary, star at the prompt point."""
+    pp = r["per_point"][0]
+    fp32 = pp["fp32_mask"].cpu().numpy().astype(bool)
+    overlay = np.zeros((*fp32.shape, 4), dtype=float)
+    overlay[fp32] = (0.20, 0.95, 0.20, 0.35)  # translucent lime fill
+    ax.imshow(overlay)
+    ax.contour(pp["quant_mask"].cpu().numpy().astype(float), levels=[0.5],
+              colors="magenta", linewidths=1.0)
+    px, py = pp["point"]
+    ax.scatter([px], [py], marker="*", s=200, c="yellow", edgecolors="black", linewidths=1)
+    idx_note = "" if pp["index_agrees"] else f" [quant picks #{pp['quant_best_idx']}]"
+    ax.set_title(f"IoU={pp['iou']:.3f} (mask #{pp['mask_idx']}){idx_note}", fontsize=9,
+                color="red" if pp["iou"] < SAM_BAD_IOU_THRESHOLD else "black")
+
+
+def _draw_sam_multi_point(ax, r: dict) -> None:
+    """Grid-prompt style: each point gets its own color — fp32 mask as a
+    translucent fill, quantized mask as a thin same-color boundary (matching
+    fill/line color says which pair belongs together), dot at the prompt.
+    Overlapping fills: later points paint over earlier ones (a readability
+    compromise, not a data statement)."""
+    cmap = plt.get_cmap("tab20")
+    h, w = r["per_point"][0]["fp32_mask"].shape
+    overlay = np.zeros((h, w, 4), dtype=float)
+    for i, pp in enumerate(r["per_point"]):
+        color = cmap(i % 20)
+        overlay[pp["fp32_mask"].cpu().numpy().astype(bool)] = (*color[:3], 0.35)
+    ax.imshow(overlay)
+    for i, pp in enumerate(r["per_point"]):
+        color = cmap(i % 20)
+        ax.contour(pp["quant_mask"].cpu().numpy().astype(float), levels=[0.5],
+                  colors=[color], linewidths=0.8)
+        px, py = pp["point"]
+        ax.scatter([px], [py], marker="o", s=18, c=[color], edgecolors="black", linewidths=0.5)
+    ax.set_title(f"IoU mean={r['mean_iou']:.3f} min={r['min_iou']:.3f} "
+                f"({len(r['per_point'])} pts)", fontsize=9,
+                color="red" if r["mean_iou"] < SAM_BAD_IOU_THRESHOLD else "black")
+
+
 def _sam_grid(results: list[dict], model_name: str, out_path: Path, cols: int = 4) -> None:
     n = len(results)
     cols = min(cols, n) if n > 0 else 1
     n_rows = max(1, (n + cols - 1) // cols)
     fig, axes = plt.subplots(n_rows, cols, figsize=(cols * 3.2, n_rows * 3.6), squeeze=False)
     axes = axes.flatten()
+    multi = len(results[0]["per_point"]) > 1 if results else False
     for ax, r in zip(axes, results):
         ax.imshow(r["image"])
-        # fp32 mask: semi-transparent filled overlay (the "before" reference)
-        fp32 = r["fp32_mask"].cpu().numpy().astype(bool)
-        overlay = np.zeros((*fp32.shape, 4), dtype=float)
-        overlay[fp32] = (0.20, 0.95, 0.20, 0.35)  # translucent lime fill
-        ax.imshow(overlay)
-        # quantized mask: thin boundary line (the "after", easy to compare against fill)
-        ax.contour(r["quant_mask"].cpu().numpy().astype(float), levels=[0.5],
-                  colors="magenta", linewidths=1.0)
-        px, py = r["point"]
-        ax.scatter([px], [py], marker="*", s=200, c="yellow", edgecolors="black", linewidths=1)
+        (_draw_sam_multi_point if multi else _draw_sam_single_point)(ax, r)
         ax.axis("off")
-        idx_note = "" if r["index_agrees"] else f" [quant picks #{r['quant_best_idx']}]"
-        ax.set_title(f"IoU={r['iou']:.3f} (mask #{r['mask_idx']}){idx_note}", fontsize=9,
-                    color="red" if r["iou"] < SAM_BAD_IOU_THRESHOLD else "black")
     for ax in axes[n:]:
         ax.axis("off")
-    fig.suptitle(f"SAM qualitative: {model_name}\n"
-                f"lime translucent fill = fp32 mask, magenta line = quantized boundary, "
-                f"star = point prompt, sorted worst-IoU-first", fontsize=10, y=0.99)
+    legend = ("translucent fill = fp32 mask, same-color thin line = quantized boundary, "
+             "dot = point prompt (one color per prompt)" if multi else
+             "lime translucent fill = fp32 mask, magenta line = quantized boundary, "
+             "star = point prompt")
+    fig.suptitle(f"SAM qualitative: {model_name}\n{legend}, sorted worst-IoU-first",
+                fontsize=10, y=0.99)
     # Fixed inch-based top margin so the two-line suptitle never collides with
     # row-0 subplot titles regardless of grid size.
     fig.subplots_adjust(hspace=0.5, wspace=0.15, top=1 - 0.85 / (n_rows * 3.6))
@@ -169,17 +202,19 @@ def _sam_grid(results: list[dict], model_name: str, out_path: Path, cols: int = 
 
 def save_sam_qualitative(fp32_model, quant_model, processor, root, num_samples: int,
                          device: torch.device, out_dir: Path, model_name: str,
-                         seed: int = 2, download: bool = True) -> Path:
-    """For real sample images + a point prompt, overlay fp32 vs quantized SAM
-    masks (the hypothesis fp32's own iou_scores ranks best, used for both so the
-    comparison is apples-to-apples), sorted worst-IoU-first. Writes
-    qualitative_sam.json and qualitative_sam_grid.png. Returns the grid path.
-    seed defaults to 2 (different from calibration's seed=0) so visualization
-    uses images not seen during calibration."""
+                         seed: int = 2, download: bool = True, grid: int = 1) -> Path:
+    """For real sample images + point prompts (grid=1: single center point;
+    grid=n: an n×n grid covering the whole image), overlay fp32 vs quantized
+    SAM masks per point (the hypothesis fp32's own iou_scores ranks best, used
+    for both so the comparison is apples-to-apples), images sorted
+    worst-mean-IoU-first. Writes qualitative_sam.json and
+    qualitative_sam_grid.png. Returns the grid path. seed defaults to 2
+    (different from calibration's seed=0) so visualization uses images not
+    seen during calibration."""
     fp32_model = fp32_model.eval().to(device)
     quant_model = quant_model.eval().to(device)
     samples = build_sam_qualitative_samples(root, processor, num_samples,
-                                            seed=seed, download=download)
+                                            seed=seed, download=download, grid=grid)
 
     results = []
     for s in samples:
@@ -187,32 +222,41 @@ def save_sam_qualitative(fp32_model, quant_model, processor, root, num_samples: 
         with torch.no_grad():
             fp32_out = fp32_model(**inputs)
             quant_out = quant_model(**inputs)
-        fp32_best_idx = int(fp32_out.iou_scores[0, 0].argmax())
-        quant_best_idx = int(quant_out.iou_scores[0, 0].argmax())
+        # post_process_masks -> per-image tensor (num_points, num_masks, H, W)
         fp32_full = processor.image_processor.post_process_masks(
             fp32_out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0]
         quant_full = processor.image_processor.post_process_masks(
             quant_out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0]
-        fp32_mask = fp32_full[0, fp32_best_idx]
-        quant_mask = quant_full[0, fp32_best_idx]
-        results.append({
-            "image": s["image"], "point": s["point"], "mask_idx": fp32_best_idx,
-            "quant_best_idx": quant_best_idx, "index_agrees": quant_best_idx == fp32_best_idx,
-            "iou": mask_iou(fp32_mask, quant_mask),
-            "fp32_mask": fp32_mask, "quant_mask": quant_mask,
-        })
-    results.sort(key=lambda r: r["iou"])  # worst first
+        per_point = []
+        for p, point in enumerate(s["points"]):
+            fp32_best_idx = int(fp32_out.iou_scores[0, p].argmax())
+            quant_best_idx = int(quant_out.iou_scores[0, p].argmax())
+            fp32_mask = fp32_full[p, fp32_best_idx]
+            quant_mask = quant_full[p, fp32_best_idx]
+            per_point.append({
+                "point": point, "mask_idx": fp32_best_idx,
+                "quant_best_idx": quant_best_idx,
+                "index_agrees": quant_best_idx == fp32_best_idx,
+                "iou": mask_iou(fp32_mask, quant_mask),
+                "fp32_mask": fp32_mask, "quant_mask": quant_mask,
+            })
+        ious = [pp["iou"] for pp in per_point]
+        results.append({"image": s["image"], "per_point": per_point,
+                        "mean_iou": sum(ious) / len(ious), "min_iou": min(ious)})
+    results.sort(key=lambda r: r["mean_iou"])  # worst first
 
-    ious = [r["iou"] for r in results]
-    print(f"    qualitative: {len(results)} samples, "
-         f"mask IoU mean {sum(ious) / len(ious):.4f}, min {min(ious):.4f}")
+    all_ious = [pp["iou"] for r in results for pp in r["per_point"]]
+    print(f"    qualitative: {len(results)} samples x {grid * grid} point(s), "
+         f"mask IoU mean {sum(all_ious) / len(all_ious):.4f}, min {min(all_ious):.4f}")
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     grid_path = out_dir / "qualitative_sam_grid.png"
     _sam_grid(results, model_name, grid_path)
-    summary = [{"point": r["point"], "mask_idx": r["mask_idx"], "iou": r["iou"],
-               "quant_best_idx": r["quant_best_idx"], "index_agrees": r["index_agrees"]}
+    summary = [{"mean_iou": r["mean_iou"], "min_iou": r["min_iou"],
+               "points": [{k: pp[k] for k in
+                           ("point", "mask_idx", "iou", "quant_best_idx", "index_agrees")}
+                          for pp in r["per_point"]]}
               for r in results]
     (out_dir / "qualitative_sam.json").write_text(json.dumps(summary, indent=2))
     return grid_path

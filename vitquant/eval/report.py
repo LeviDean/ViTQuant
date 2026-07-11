@@ -101,12 +101,17 @@ def sam_report(r: dict) -> str:
     sim = r["iou_simulated"]
     wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
     scheme = scheme_str(wbits, abits)
+    grid = r.get("prompt_grid", 1)
+    prompts = (f"a {grid}x{grid} grid of point prompts per image (covering the whole image)"
+              if grid > 1 else "a single center-point prompt per image")
 
     parts = [f"# SAM Quantization Report: {r['model']} ({scheme})",
              f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) self-consistency "
              f"— device-independent, no real int8 kernel run.\n",
              "Only `vision_encoder` is quantized; `prompt_encoder` and "
-             "`mask_decoder` stay fp32.\n",
+             "`mask_decoder` stay fp32. "
+             f"Evaluation uses {prompts}; IoU aggregates over every "
+             "(image, point, mask-hypothesis) triple.\n",
              "## Self-Consistency IoU (fp32 vs simulated-quant masks)\n",
              md_table(["Variant", "Mean IoU", "Min IoU"], [
                  [f"{scheme} simulated (custom kernel, fake-quant)",

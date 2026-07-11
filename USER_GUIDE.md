@@ -128,6 +128,7 @@ data:
   download: true
   calib_samples: 16                     # 校准样本数（正式跑建议 64-128）
   eval_samples: 16                      # 评估样本数
+  prompt_grid: 4                        # 每张图 n×n 网格 prompt 点（1 = 只用图像中心一个点）
 quant:
   weight:     {bits: 8, symmetric: true,  per_channel: true,  observer: minmax}
   activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
@@ -198,7 +199,14 @@ python scripts/run_sam.py --config configs/sam_vit_b.yaml
 1. **自一致性 IoU**——fp32 mask vs 量化 mask 的相似度（SAM 没有 top-1）
 2. **逐块敏感度**（IoU）——每个 vision encoder block 单独量化测 IoU 降幅
 3. **混合精度权衡**（IoU）——保护最敏感的 K 层、扫 K 得 IoU vs 压缩曲线
-4. **定性可视化**——fp32 vs 量化 mask 轮廓叠加网格
+4. **定性可视化**——fp32 vs 量化 mask 叠加网格
+
+**Prompt 覆盖范围**：评估默认对每张图撒 `prompt_grid` × `prompt_grid` 的均匀网格点
+（默认 4×4 = 16 个 prompt），衡量量化对**全图各处对象**分割的影响，而不只是中心物体。
+被量化的 vision encoder 每张图仍只前向一次（多点只重复很轻的 prompt encoder / mask
+decoder），所以网格几乎不增加评估耗时。设 `prompt_grid: 1`（或 `--prompt-grid 1`）
+可回到单中心点模式。校准始终用单中心点——vision encoder 的激活与 prompt 点无关，
+网格不会改变校准统计量。
 
 ### 常用 flag
 
@@ -231,8 +239,8 @@ python scripts/run_sam.py --config configs/sam_vit_b.yaml
 |---|---|
 | `report.md` | IoU 表 / 理论压缩表 / 逐块敏感度表 / 混合精度权衡表 |
 | `results.json` | 结构化数据（含 `mean_iou`/`min_iou`/`per_sample_iou`、敏感度、混合精度） |
-| `qualitative_sam_grid.png` | fp32（青绿实线）vs 量化（品红虚线）mask 轮廓叠加，IoU 最差的排前面标红 |
-| `qualitative_sam.json` | 每个样本的 IoU 详情 |
+| `qualitative_sam_grid.png` | fp32 mask（半透明填充）vs 量化 mask（细边界线）叠加，IoU 最差的排前面标红；网格 prompt 模式下每个点一种颜色，同色填充/线条属于同一 prompt |
+| `qualitative_sam.json` | 每个样本逐 prompt 点的 IoU 详情 |
 
 ### 怎么读报告（示例：混合精度权衡表）
 
