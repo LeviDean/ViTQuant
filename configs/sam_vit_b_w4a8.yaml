@@ -1,0 +1,21 @@
+# SAM ViT-B W4A8, naive-PTQ production baseline (server/GPU): minmax weights +
+# moving-average activations, round-to-nearest. Pair with
+# sam_vit_b_w4a8_advanced.yaml — same data/protocol, only the algorithms differ —
+# to measure what the advanced PTQ stack buys at 4-bit weights.
+model:
+  name: facebook/sam-vit-base
+  checkpoint: weights/sam-vit-base
+
+data:
+  root: data
+  download: false           # server: data pre-copied
+  calib_samples: 64
+  eval_samples: 128
+  prompt_grid: 4            # whole-image protocol: 4x4 point prompts per eval image
+
+quant:
+  weight: {bits: 4, symmetric: true, per_channel: true, observer: minmax}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+
+device: auto
+output_dir: outputs/sam_vit_b_w4a8_baseline

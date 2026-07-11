@@ -92,8 +92,11 @@ SamProcessor.from_pretrained('facebook/sam-vit-base').save_pretrained('weights/s
 |---|---|
 | `configs/deit_tiny.yaml` | 分类小模型，开发机快速迭代 |
 | `configs/vit_base.yaml` | 分类大模型，服务器完整评估 |
-| `configs/deit_tiny_w4a8.yaml` | W4A8 方案（4-bit 权重），研究低位宽精度代价 |
-| `configs/sam_vit_b.yaml` | SAM vision encoder 量化 |
+| `configs/deit_tiny_w4a8.yaml` | W4A8 朴素 PTQ 基线（4-bit 权重），研究低位宽精度代价 |
+| `configs/deit_tiny_w4a8_advanced.yaml` | W4A8 + 全套高级算法（MSE 截断 + SmoothQuant + AdaRound），与上一行直接对比 |
+| `configs/sam_vit_b.yaml` | SAM vision encoder 量化（W8A8） |
+| `configs/sam_vit_b_w4a8.yaml` | SAM W4A8 朴素 PTQ 基线（服务器生产参数：calib 64 / eval 128 / 4×4 网格） |
+| `configs/sam_vit_b_w4a8_advanced.yaml` | SAM W4A8 + 全套高级算法，与上一行同数据同协议直接对比 |
 
 ### 分类配置字段（以 `deit_tiny.yaml` 为例）
 

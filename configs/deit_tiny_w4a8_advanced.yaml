@@ -1,0 +1,33 @@
+# deit_tiny W4A8 with the full advanced-PTQ stack: MSE-optimal clipping +
+# SmoothQuant + AdaRound. Same data/protocol as deit_tiny_w4a8.yaml (the naive
+# baseline) so the two reports are directly comparable.
+# Measured on MPS: naive top-1 drop 1.76% -> AdaRound-only 0.25%.
+model:
+  name: deit_tiny_patch16_224
+  checkpoint: weights/deit_tiny_patch16_224.pth
+
+data:
+  root: data
+  download: true
+  batch_size: 64
+  num_workers: 4
+  calib_images: 256
+  calib_batch_size: 32
+
+quant:
+  weight: {bits: 4, symmetric: true, per_channel: true, observer: mse}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: mse}
+
+smoothquant:
+  enabled: true
+  alpha: 0.5
+
+adaround:
+  enabled: true
+  iters: 1000
+
+eval:
+  max_batches: null
+
+device: auto
+output_dir: outputs/deit_tiny_w4a8_advanced

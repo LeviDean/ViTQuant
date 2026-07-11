@@ -1,0 +1,30 @@
+# SAM ViT-B W4A8 with the full advanced-PTQ stack (server/GPU production):
+# MSE-optimal clipping + SmoothQuant + AdaRound. Same data/protocol as
+# sam_vit_b_w4a8.yaml (the naive baseline) so the two reports are directly
+# comparable. Expect the mixed-precision curve to shift up vs the baseline —
+# fewer protected blocks (smaller K) for the same IoU.
+model:
+  name: facebook/sam-vit-base
+  checkpoint: weights/sam-vit-base
+
+data:
+  root: data
+  download: false           # server: data pre-copied
+  calib_samples: 64
+  eval_samples: 128
+  prompt_grid: 4            # whole-image protocol: 4x4 point prompts per eval image
+
+quant:
+  weight: {bits: 4, symmetric: true, per_channel: true, observer: mse}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: mse}
+
+smoothquant:
+  enabled: true
+  alpha: 0.5
+
+adaround:
+  enabled: true
+  iters: 1000               # per-layer optimization steps; the MPS smoke used 200
+
+device: auto
+output_dir: outputs/sam_vit_b_w4a8_advanced
