@@ -145,7 +145,7 @@ output_dir: outputs/sam_vit_b
 | `bits` | 任意整数（常用 8 / 4） | 位宽 |
 | `symmetric` | true / false | 对称 / 非对称量化 |
 | `per_channel` | true / false | 逐通道 / 逐张量 |
-| `observer` | `minmax` / `moving_avg` / `percentile` | 统计量收集方式 |
+| `observer` | `minmax` / `moving_avg` / `percentile` / `mse` | 统计量收集方式;`mse` 为 MSE 最优截断(网格搜索使量化误差最小的截断范围,抗离群值,低位宽下收益明显) |
 
 想跑 W4A8 就把 `weight.bits` 改成 4（`deit_tiny_w4a8.yaml` 已是现成例子）。任意位宽组合开箱即用。
 
