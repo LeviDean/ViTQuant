@@ -12,7 +12,14 @@ from vitquant.quant.qconfig import QConfig
 
 class QuantLinear(nn.Linear):
     """nn.Linear with fake-quant on input activation and weight.
-    Construct via from_float(); shares parameter storage with the source module."""
+    Construct via from_float(); shares parameter storage with the source module.
+
+    Optionally carries a SmoothQuant per-input-channel scale s (see
+    vitquant.quant.smoothquant): the forward computes (x/s) @ (s*W)^T, which is
+    mathematically identical to x @ W^T in fp32 but moves activation outliers
+    into the weights, where per-channel quantization absorbs them. The
+    quantizers then see the smoothed input and the scaled weight, so SmoothQuant
+    must be applied BEFORE calibration."""
 
     @classmethod
     def from_float(cls, mod: nn.Linear, qconfig: QConfig) -> "QuantLinear":
@@ -21,10 +28,24 @@ class QuantLinear(nn.Linear):
         new.bias = mod.bias
         new.input_fq = FakeQuantize(qconfig.activation)
         new.weight_fq = FakeQuantize(qconfig.weight)
+        new.register_buffer("smooth_scale", torch.empty(0))
         return new
 
+    def smooth_input(self, x: torch.Tensor) -> torch.Tensor:
+        """The input as the quantizers see it (after SmoothQuant, if set)."""
+        if self.smooth_scale.numel():
+            return x / self.smooth_scale
+        return x
+
+    def effective_weight(self) -> torch.Tensor:
+        """The weight as the quantizers see it (after SmoothQuant, if set)."""
+        if self.smooth_scale.numel():
+            return self.weight * self.smooth_scale
+        return self.weight
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.linear(self.input_fq(x), self.weight_fq(self.weight), self.bias)
+        return F.linear(self.input_fq(self.smooth_input(x)),
+                        self.weight_fq(self.effective_weight()), self.bias)
 
 
 class QuantConv2d(nn.Conv2d):

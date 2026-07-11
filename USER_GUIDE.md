@@ -149,6 +149,35 @@ output_dir: outputs/sam_vit_b
 
 想跑 W4A8 就把 `weight.bits` 改成 4（`deit_tiny_w4a8.yaml` 已是现成例子）。任意位宽组合开箱即用。
 
+### 高级 PTQ 算法（可选，分类和 SAM 通用）
+
+在朴素「observer 标定 + 最近舍入」之上，可叠加三个正交的算法，全部配置开关、无需改代码：
+
+```yaml
+quant:
+  weight:     {bits: 4, symmetric: true,  per_channel: true,  observer: mse}   # ① MSE 最优截断
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: mse}
+
+smoothquant:          # ② 激活离群值迁移（校准前，逐输入通道把离群幅值挪进权重）
+  enabled: true
+  alpha: 0.5          # 迁移强度，0.5 = 论文默认
+
+adaround:             # ③ 自适应权重舍入（校准后，逐层学「向上还是向下舍入」）
+  enabled: true
+  iters: 1000         # 每层优化步数；越大越准、越慢（GPU 上建议 1000+）
+  # lr: 0.01  reg_weight: 0.01  max_tokens: 2048   # 一般不用动
+```
+
+| 算法 | 打哪个痛点 | 何时收益大 | 成本 |
+|---|---|---|---|
+| `observer: mse` | min/max 被离群值撑大 | 低位宽（W4）、有离群值 | 校准时一次网格搜索，几乎免费 |
+| SmoothQuant | 激活个别通道幅值过大 | A8 且激活有离群通道 | 一次额外统计前向，免费 |
+| AdaRound | 4-bit 最近舍入太粗暴 | W4 及以下 | 每层几百步小优化（分类几分钟，SAM 建议 GPU） |
+
+实测（deit_tiny W4A8 全量验证集，top-1 掉点）：朴素 1.76% → MSE 截断 1.32% → **AdaRound 0.25%**；
+SAM ViT-B W4A8（8 图冒烟 IoU）：朴素 0.566 → MSE 0.675 → 全栈组合 **0.705**。
+三者可任意组合；执行顺序框架自动保证（SmoothQuant → 校准 → AdaRound）。报告头部会注明该次运行启用了哪些算法。
+
 ---
 
 ## 4. 使用：分类 ViT

@@ -19,7 +19,7 @@ from vitquant.eval.sam_evaluate import (block_sensitivity_sam, evaluate_sam_cons
                                         mixed_precision_sweep_sam)
 from vitquant.models.sam_loader import load_sam_model
 from vitquant.quant.qconfig import qconfig_from_dict
-from vitquant.quant.sam_calibrate import calibrate_sam
+from vitquant.quant.sam_calibrate import adaround_sam, calibrate_sam, smooth_quant_sam
 from vitquant.quant.sam_convert import convert_sam_vision_encoder
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
@@ -71,8 +71,22 @@ def main() -> None:
     print("Converting + calibrating quantized vision encoder ...")
     quant_model, _ = load_sam_model(cfg["model"]["name"], cfg["model"]["checkpoint"])
     convert_sam_vision_encoder(quant_model, base_qc)
+    sq = cfg.get("smoothquant") or {}
+    if sq.get("enabled"):
+        sq_alpha = float(sq.get("alpha", 0.5))
+        print(f"SmoothQuant outlier migration (alpha={sq_alpha}) ...")
+        smooth_quant_sam(quant_model, calib_samples, device, alpha=sq_alpha)
     calibrate_sam(quant_model, calib_samples, device,
                   progress=calib_progress("calib", len(calib_samples)))
+    ar = cfg.get("adaround") or {}
+    if ar.get("enabled"):
+        ar_iters = int(ar.get("iters", 1000))
+        print(f"AdaRound weight-rounding refinement ({ar_iters} iters/layer) ...")
+        adaround_sam(quant_model, calib_samples, device, iters=ar_iters,
+                     lr=float(ar.get("lr", 1e-2)),
+                     reg_weight=float(ar.get("reg_weight", 0.01)),
+                     max_tokens=int(ar.get("max_tokens", 2048)),
+                     log=lambda msg: print(f"    [adaround] {msg}"))
 
     print("Evaluating simulated self-consistency (fp32 vs fake-quant masks) ...")
     sim_result = evaluate_sam_consistency(fp32_model, quant_model, eval_samples, device)
@@ -88,6 +102,10 @@ def main() -> None:
         "prompt_grid": grid,
         "iou_simulated": sim_result,
     }
+    if ar.get("enabled"):
+        results["adaround"] = {"iters": int(ar.get("iters", 1000))}
+    if sq.get("enabled"):
+        results["smoothquant"] = {"alpha": float(sq.get("alpha", 0.5))}
 
     # Per-block sensitivity (IoU): quantize one vision-encoder block at a time,
     # measure how much the masks change vs full fp32. Restores full quant on exit.

@@ -6,14 +6,22 @@ from vitquant.quant.qconfig import TensorQConfig
 
 
 def fake_quantize(x: torch.Tensor, scale: torch.Tensor, zero_point: torch.Tensor,
-                  qmin: int, qmax: int, ch_axis: int | None = None) -> torch.Tensor:
-    """Quantize -> dequantize in fp32, with straight-through estimator for gradients."""
+                  qmin: int, qmax: int, ch_axis: int | None = None,
+                  round_offset: torch.Tensor | None = None) -> torch.Tensor:
+    """Quantize -> dequantize in fp32, with straight-through estimator for
+    gradients. round_offset (same shape as x, entries in {0, 1}) replaces
+    round-to-nearest with AdaRound's learned floor/ceil choice:
+    round(x/s) becomes floor(x/s) + offset."""
     if ch_axis is not None:
         shape = [1] * x.dim()
         shape[ch_axis] = -1
         scale = scale.reshape(shape)
         zero_point = zero_point.reshape(shape)
-    q = torch.clamp(torch.round(x / scale) + zero_point, qmin, qmax)
+    if round_offset is None:
+        q = torch.round(x / scale)
+    else:
+        q = torch.floor(x / scale) + round_offset
+    q = torch.clamp(q + zero_point, qmin, qmax)
     dq = (q - zero_point) * scale
     return x + (dq - x).detach()  # STE: forward=dq, backward=identity
 
@@ -34,6 +42,9 @@ class FakeQuantize(nn.Module):
         self.quantizing = False
         self.register_buffer("scale", torch.empty(0))
         self.register_buffer("zero_point", torch.empty(0))
+        # AdaRound: per-element {0,1} floor/ceil choice, same shape as the
+        # quantized tensor (weights only). Empty = plain round-to-nearest.
+        self.register_buffer("round_offset", torch.empty(0))
 
     @property
     def is_frozen(self) -> bool:
@@ -50,8 +61,10 @@ class FakeQuantize(nn.Module):
         if self.quantizing:
             qmin, qmax = qrange(self.cfg.bits, self.cfg.symmetric)
             ch_axis = self.cfg.ch_axis if self.cfg.per_channel else None
+            offset = self.round_offset.to(x.device) if self.round_offset.numel() else None
             return fake_quantize(x, self.scale.to(x.device),
-                                 self.zero_point.to(x.device), qmin, qmax, ch_axis)
+                                 self.zero_point.to(x.device), qmin, qmax, ch_axis,
+                                 round_offset=offset)
         return x
 
 
@@ -91,5 +104,9 @@ def calibrate_weights(model: nn.Module) -> None:
         weight_fq = getattr(m, "weight_fq", None)
         weight = getattr(m, "weight", None)
         if isinstance(weight_fq, FakeQuantize) and isinstance(weight, torch.Tensor):
+            # SmoothQuant-aware: observe the weight as the quantizer will see it
+            # (scaled by the smoothing factors, when the module carries them).
+            if hasattr(m, "effective_weight"):
+                weight = m.effective_weight()
             weight_fq.observer(weight.detach())
             weight_fq.freeze()

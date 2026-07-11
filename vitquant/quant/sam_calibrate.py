@@ -3,7 +3,9 @@ from typing import Callable, Optional
 import torch
 from torch import nn
 
+from vitquant.quant.adaround import adaround
 from vitquant.quant.calibrate import run_calibration
+from vitquant.quant.smoothquant import smooth_quant
 
 
 def _feed_sam_inputs(model: nn.Module, inputs: dict, device: torch.device) -> None:
@@ -24,3 +26,17 @@ def calibrate_sam(model: nn.Module, samples: list[dict], device: torch.device,
     are calibrated up front (data-independent); the sample pass only collects
     activation statistics."""
     return run_calibration(model, samples, device, _feed_sam_inputs, progress=progress)
+
+
+def adaround_sam(model: nn.Module, samples: list[dict], device: torch.device,
+                 **kwargs) -> nn.Module:
+    """AdaRound refinement for a calibrated SAM model — the generic adaround
+    with the SAM dict-of-named-tensors feed (same pairing as calibrate_sam)."""
+    return adaround(model, samples, device, feed=_feed_sam_inputs, **kwargs)
+
+
+def smooth_quant_sam(model: nn.Module, samples: list[dict], device: torch.device,
+                     **kwargs) -> nn.Module:
+    """SmoothQuant factors for a converted (pre-calibration) SAM model — the
+    generic smooth_quant with the SAM dict-of-named-tensors feed."""
+    return smooth_quant(model, samples, device, feed=_feed_sam_inputs, **kwargs)

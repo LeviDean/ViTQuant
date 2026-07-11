@@ -125,6 +125,21 @@ ready-made W4A8 example: it measures the accuracy cost of 4-bit weights
 (relevant for edge NPUs that prefer 4-bit weights), purely as a simulated
 accuracy number. There is no real W4A8 runtime path in this project.
 
+### Advanced PTQ algorithms (optional, config-only)
+
+Three orthogonal, composable refinements over naive "observer + round-to-
+nearest" PTQ — all pure config switches, for both pipelines (see
+USER_GUIDE.md §3 for details and measured gains):
+
+- **MSE-optimal clipping** (`observer: mse`) — grid-search the clip range that
+  minimizes quantization MSE instead of trusting outlier-inflated min/max.
+- **SmoothQuant** (`smoothquant.enabled`) — pre-calibration per-channel
+  equivalent transform `x@Wᵀ == (x/s)@(s·W)ᵀ` migrating activation outliers
+  into per-channel-quantized weights.
+- **AdaRound** (`adaround.enabled`) — post-calibration learned up/down
+  rounding per weight (layer-output reconstruction, no labels). Measured:
+  deit_tiny W4A8 top-1 drop 1.76% → **0.25%**.
+
 ## SAM: vision-encoder-only quantization (self-consistency IoU)
 
 Alongside the classification ViT pipeline above, this framework also quantizes

@@ -47,6 +47,21 @@ def write_outputs(out_dir, results: dict, report: str, extra_note: str = "") -> 
     return out
 
 
+def adaround_note(r: dict) -> str:
+    """Marker lines for the advanced-PTQ passes a run used (AdaRound and/or
+    SmoothQuant), so two reports are never comparable without saying so."""
+    note = ""
+    if r.get("smoothquant"):
+        note += (f"\nActivation smoothing: **SmoothQuant** "
+                 f"(alpha={r['smoothquant']['alpha']}, per-input-channel outlier "
+                 "migration into weights before calibration).\n")
+    if r.get("adaround"):
+        note += (f"\nWeight rounding: **AdaRound** "
+                 f"({r['adaround']['iters']} iters/layer, learned on the calibration "
+                 "set) on top of the calibrated scales.\n")
+    return note
+
+
 def classification_report(r: dict) -> str:
     """Markdown report for the classification ViT pipeline: accuracy, theoretical
     compression, and (when present) per-block sensitivity, mixed-precision
@@ -62,7 +77,8 @@ def classification_report(r: dict) -> str:
     ]
     parts = [f"# Quantization Report: {r['model']} ({scheme})",
              f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) accuracy — "
-             f"device-independent, no real int8 kernel run.\n",
+             f"device-independent, no real int8 kernel run.\n"
+             + adaround_note(r),
              "## Accuracy\n",
              md_table(["Variant", "Top-1", "Top-5", "Top-1 drop vs FP32"], acc_rows),
              "\n" + theoretical_compression_section(wbits)]
@@ -107,7 +123,8 @@ def sam_report(r: dict) -> str:
 
     parts = [f"# SAM Quantization Report: {r['model']} ({scheme})",
              f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) self-consistency "
-             f"— device-independent, no real int8 kernel run.\n",
+             f"— device-independent, no real int8 kernel run.\n"
+             + adaround_note(r),
              "Only `vision_encoder` is quantized; `prompt_encoder` and "
              "`mask_decoder` stay fp32. "
              f"Evaluation uses {prompts}; IoU aggregates over every "

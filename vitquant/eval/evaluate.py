@@ -6,6 +6,7 @@ from torch.utils.data import DataLoader
 
 from vitquant.eval.metrics import AccuracyMeter
 from vitquant.quant.fake_quant import FakeQuantize, set_quantizing
+from vitquant.quant.groups import group_key as _group_key
 
 ProgressFn = Callable[[int, int], None]  # progress(batch_index, total_batches)
 
@@ -32,22 +33,6 @@ def evaluate_torch(model: nn.Module, loader: DataLoader, class_indices: list[int
         if progress is not None:
             progress(i, total)
     return {"top1": meter.top1, "top5": meter.top5}
-
-
-def _group_key(name: str) -> str:
-    """Map a quantizer/module name to its per-block sensitivity group, for both
-    naming schemes: timm ViT ("blocks.N.*") and HF SAM vision encoder
-    ("vision_encoder.layers.N.*"). A transformer block groups by the path through
-    its index; everything else (patch embed, SAM neck) groups by its owning
-    component (drop the leaf module + the fq buffer name).
-
-    Classification names collapse to the same keys as before — "blocks.N" and
-    "patch_embed" — so classification grouping is unchanged."""
-    parts = name.split(".")
-    for i in range(len(parts) - 1):
-        if parts[i] in ("blocks", "layers") and parts[i + 1].isdigit():
-            return ".".join(parts[: i + 2])
-    return ".".join(parts[:-2]) if len(parts) > 2 else parts[0]
 
 
 def _fq_groups(model: nn.Module) -> dict[str, list[FakeQuantize]]:

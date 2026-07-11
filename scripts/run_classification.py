@@ -21,8 +21,10 @@ from vitquant.eval.evaluate import (block_sensitivity, evaluate_torch,
 from vitquant.eval.qualitative import save_classification_qualitative
 from vitquant.eval.report import classification_report, write_outputs
 from vitquant.models.loader import load_model
+from vitquant.quant.adaround import adaround
 from vitquant.quant.calibrate import calibrate
 from vitquant.quant.convert import convert_vit
+from vitquant.quant.smoothquant import smooth_quant
 from vitquant.quant.qconfig import QConfig, qconfig_from_dict
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
@@ -89,7 +91,23 @@ def main() -> None:
     # 2. simulated INT8 (research layer)
     print(f"[2/6] simulated INT8 (custom kernel): calibrating ({n_calib} batches)")
     qmodel = convert_vit(model, base_qc)
+    sq = cfg.get("smoothquant") or {}
+    if sq.get("enabled"):
+        sq_alpha = float(sq.get("alpha", 0.5))
+        print(f"[2/6] SmoothQuant outlier migration (alpha={sq_alpha}) ...")
+        smooth_quant(qmodel, calib, device, alpha=sq_alpha)
+        results["smoothquant"] = {"alpha": sq_alpha}
     calibrate(qmodel, calib, device, progress=calib_progress("calib", n_calib))
+    ar = cfg.get("adaround") or {}
+    if ar.get("enabled"):
+        ar_iters = int(ar.get("iters", 1000))
+        print(f"[2/6] AdaRound weight-rounding refinement ({ar_iters} iters/layer)")
+        adaround(qmodel, calib, device, iters=ar_iters,
+                 lr=float(ar.get("lr", 1e-2)),
+                 reg_weight=float(ar.get("reg_weight", 0.01)),
+                 max_tokens=int(ar.get("max_tokens", 2048)),
+                 log=lambda msg: print(f"    [adaround] {msg}"))
+        results["adaround"] = {"iters": ar_iters}
     print(f"[2/6] simulated INT8: evaluating ({n_val} batches)")
     results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
                                                progress=batch_progress("int8 sim", n_val))

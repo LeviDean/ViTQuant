@@ -40,11 +40,15 @@
 
 ### 2.2 Observer（`vitquant/quant/observers.py`）
 
-三种统计量收集器，都继承自 `ObserverBase`（`nn.Module`），支持逐张量和逐通道两种归约方式：
+四种统计量收集器，都继承自 `ObserverBase`（`nn.Module`），支持逐张量和逐通道两种归约方式：
 
 - `MinMaxObserver`：跟踪全局最小/最大值
 - `MovingAvgMinMaxObserver`：指数滑动平均（动量 0.1）更新最小/最大值
 - `PercentileObserver`：用分位数裁剪离群值，仅支持逐张量（超过 100 万元素会自动子采样）
+- `MSEObserver`：MSE 最优截断——对数间隔网格搜索截断比例 α（40 个候选、低至 0.01），
+  取使 quantize-dequantize MSE 最小的 clip 范围；逐通道配置下每通道独立搜索（向量化），
+  多次观测（激活）用 EMA 合并。scale/zero_point 推导公式抽成共享的 `qparams_from_range`，
+  保证搜索时用的公式与最终 `compute_qparams` 一致
 
 `compute_qparams()` 根据统计量计算 scale 和 zero_point：对称量化用受限范围（如 8-bit 为 -127~127，保证 zero_point 恰好为 0）；非对称量化用完整范围（-128~127），并强制数值范围包含 0（保证真实的 0 能被精确表示）。未校准就调用会抛出 `CalibrationError`。
 
@@ -85,6 +89,24 @@ dq = (q - zero_point) * scale
 3. **切换量化**：冻结激活 qparams，最后 `set_quantizing()` 把所有 FakeQuantize（权重+激活）切到量化模式。
 
 `freeze()` 只负责"从 observer 算出 qparams"，不再顺带打开量化开关，"是否应用量化"由 `set_quantizing()` 独立控制——这样 `block_sensitivity` 才能在校准完成后逐块开关量化，也为后续研究（逐权重张量的 MSE 最优 scale 搜索、权重/激活各自独立的标定策略等）留出干净的接口。
+
+### 2.7 高级 PTQ 算法（`adaround.py` / `smoothquant.py` + `observer: mse`）
+
+朴素「observer + 最近舍入」之上的三个正交算法，全部配置开关（用法见 USER_GUIDE §3，
+实验设计见 EXPERIMENT_DESIGN §4.8）：
+
+- **MSE 最优截断**：见 §2.2 的 `MSEObserver`。
+- **SmoothQuant**（`smoothquant.py`）：校准**前**，对每个 `QuantLinear` 装一个逐输入通道
+  的等价缩放 `s`（`x@Wᵀ == (x/s)@(s·W)ᵀ`），把激活离群通道的幅值迁进权重。`QuantLinear`
+  增加 `smooth_scale` buffer 与 `smooth_input()` / `effective_weight()` 两个访问器，
+  `calibrate_weights` 与 AdaRound 都通过访问器取「量化器实际看到的」输入/权重，保证三者组合正确。
+- **AdaRound**（`adaround.py`）：校准**后**，按 block 分组（`quant/groups.py`，与敏感度分析
+  共用同一分组逻辑）逐组捕获层输入、逐层优化 rectified-sigmoid 软舍入变量（β 退火正则，
+  层输出重构 MSE 为目标，无标签），二值化后存进 `FakeQuantize` 新增的 `round_offset` buffer
+  （`round(x/s)` 变为 `floor(x/s)+offset`）。若学出的舍入在重构误差上劣于最近舍入则自动回退；
+  `quantizing` 开关语义不变，敏感度/混合精度对 AdaRound 后的模型零改动可用。
+
+执行顺序由脚本保证：convert → SmoothQuant → calibrate → AdaRound → 评估。
 
 ## 3. 评估体系（`vitquant/eval/`）
 
