@@ -83,19 +83,33 @@ def load_quant_state(model: nn.Module, artifact_dir) -> int:
     return len(state)
 
 
-def load_quantized_sam(artifact_dir, device=None):
+def load_quantized_sam(artifact_dir, device=None, family: str | None = None):
     """One-call loader for the SAM families: rebuild fp32 model + processor
     from the meta, convert, load the quantization state, move to device.
-    Returns (model, processor, meta)."""
+    Returns (model, processor, meta).
+
+    `family` overrides the artifact's own family. The supported cross-load is
+    sam3 (tracker) <-> sam3_concept: both classes share the SAME vision
+    encoder (same checkpoint tensors, same module paths), and only the vision
+    encoder is quantized with image-only-dependent statistics — so a
+    quantization state calibrated through one entry point is exactly valid
+    for the other. SAM1 artifacts have no text path and cannot cross-load."""
     from vitquant.models.sam_loader import (load_sam3_concept_model,
                                             load_sam3_model, load_sam_model)
     from vitquant.quant.qconfig import qconfig_from_dict
     from vitquant.quant.sam_convert import convert_sam_vision_encoder
 
     meta = read_meta(artifact_dir)
+    use_family = family or meta["family"]
+    if family and {family, meta["family"]} - {"sam3", "sam3_concept"} \
+            and family != meta["family"]:
+        raise ValueError(
+            f"cannot load a {meta['family']} artifact as {family}: only the "
+            "sam3 tracker <-> sam3_concept pair shares its quantized encoder")
     loaders = {"sam": load_sam_model, "sam3": load_sam3_model,
                "sam3_concept": load_sam3_concept_model}
-    model, processor = loaders[meta["family"]](meta["model"], meta["checkpoint"])
+    model, processor = loaders[use_family](meta["model"], meta["checkpoint"])
+    meta = {**meta, "family": use_family}
     convert_sam_vision_encoder(model, qconfig_from_dict(meta["quant"]))
     n = load_quant_state(model, artifact_dir)
     if device is not None:

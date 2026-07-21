@@ -296,9 +296,14 @@ python scripts/run_sam.py --config configs/sam3_w4a8_advanced.yaml --save-quanti
 
 # 之后:对无标注测试集推理(每图输出 masks .npz + 叠加可视化 .png)
 python scripts/infer_sam.py --artifact outputs/sam3_w4a8_advanced --images 测试集目录/
-# sam3_concept 产物用文本指定要找的概念:
-python scripts/infer_sam.py --artifact outputs/sam3_concept_w8a8 --images 目录/ --text "gas pump"
+# 文本推理:指定要找的概念,输出全图所有实例
+python scripts/infer_sam.py --artifact outputs/sam3_w4a8_advanced --images 目录/ --text "gas pump"
 ```
+
+**同一个 SAM3 产物,点提示和文本推理都能用**:tracker 与文本概念模型共享同一个被量化的
+vision encoder,且其校准与提示方式无关,所以点提示实验存的量化参数对文本任务严格有效
+——给 `--text` 就自动按概念模型(`Sam3Model`)加载同一份量化状态,不给就走点网格。
+(SAM1 产物无文本通路,`--text` 会明确报错。)
 
 原理:所有算法都不改原始权重(scale/zero_point、AdaRound round_offset、SmoothQuant
 smooth_scale 全是运行时 buffer),所以产物**只存量化参数**(SAM1 全栈约 88MB,其中

@@ -107,10 +107,18 @@ def main() -> None:
     args = ap.parse_args()
 
     device = resolve_device(args.device)
-    model, processor, meta = load_quantized_sam(args.artifact, device=device)
+    # A sam3 (point-prompt tracker) artifact can serve text-prompted concept
+    # inference too: tracker and Sam3Model share the quantized vision encoder,
+    # and its calibration doesn't depend on prompts. Passing --text on a sam3
+    # artifact loads the concept model with the same quantization state.
+    meta_family = None
+    if args.text:
+        meta_family = "sam3_concept"
+    model, processor, meta = load_quantized_sam(args.artifact, device=device,
+                                                family=meta_family)
     family = meta["family"]
     if family == "sam3_concept" and not args.text:
-        ap.error("--text is required for a sam3_concept artifact")
+        ap.error("--text is required for concept (text-prompt) inference")
 
     images = _list_images(Path(args.images))
     if not images:
