@@ -165,3 +165,63 @@ def sam_report(r: dict) -> str:
               "Only the vision encoder (ViT backbone) is quantized. `prompt_encoder` "
               "and `mask_decoder` remain fp32 PyTorch."]
     return "\n".join(parts) + "\n"
+
+
+def sam3_concept_report(r: dict) -> str:
+    """Markdown report for SAM3 concept segmentation (text prompts):
+    instance-set self-consistency (greedy IoU matching) + theoretical
+    compression, plus sensitivity / mixed-precision tables when present."""
+    c = r["concept_consistency"]
+    wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
+    scheme = scheme_str(wbits, abits)
+    algos = []
+    if r.get("smoothquant"):
+        algos.append(f"SmoothQuant (alpha={r['smoothquant']['alpha']})")
+    if r.get("adaround"):
+        algos.append(f"AdaRound ({r['adaround']['iters']} iters/layer)")
+    algo_note = ("\nAlgorithms: **" + " + ".join(algos) + "**.\n") if algos else ""
+
+    parts = [f"# SAM3 Concept-Segmentation Quantization Report: {r['model']} ({scheme})",
+             f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) self-consistency "
+             f"— device-independent, no real int8 kernel run.",
+             algo_note,
+             "Text-prompted concept segmentation (Sam3Model): each image is prompted "
+             "with its own class name; fp32 and quantized instance sets are matched "
+             "greedily by mask IoU. consistency = sum(matched IoU) / max(n_fp32, "
+             "n_quant) — misses and hallucinations both score 0. Only the shared "
+             "`vision_encoder` is quantized; text encoder, DETR decoder and mask "
+             "head stay fp32.\n",
+             "## Instance-Set Self-Consistency (fp32 vs simulated-quant)\n",
+             md_table(["Metric", "Value"], [
+                 ["Mean consistency", f"{c['mean_consistency']:.4f}"],
+                 ["Min consistency", f"{c['min_consistency']:.4f}"],
+                 ["Detection F1", f"{c['mean_f1']:.4f}"],
+                 ["Matched-pair mean IoU", f"{c['mean_matched_iou']:.4f}"],
+                 ["Avg instances (fp32 / quant)",
+                  f"{c['avg_instances_fp32']:.1f} / {c['avg_instances_quant']:.1f}"],
+             ]),
+             "\n" + theoretical_compression_section(wbits)]
+
+    if "sensitivity" in r:
+        parts.append("\n## Per-Block Sensitivity (consistency drop when only "
+                     "that block is quantized)\n")
+        parts.append(md_table(["Block", "Consistency drop"],
+                              [[k, f"{v:.4f}"] for k, v in r["sensitivity"].items()]))
+
+    if r.get("mixed_precision"):
+        parts.append(f"\n## Mixed-Precision Trade-off ({scheme} base, protected "
+                     "blocks kept FP32)\n")
+        mp_rows = []
+        for row in r["mixed_precision"]:
+            prot = ", ".join(row["protected"]) or "(none — uniform)"
+            mp_rows.append([str(row["k"]), prot, f"{row['consistency']:.4f}",
+                            f"{row['avg_weight_bits']:.2f}", f"{row['compression']:.2f}x"])
+        parts.append(md_table(
+            ["K protected", "Blocks kept FP32", "Consistency", "Avg weight bits",
+             "Compression vs FP32"], mp_rows))
+
+    parts += ["\n## Scope\n",
+              "Only the shared PE vision encoder is quantized; `text_encoder`, "
+              "`detr_encoder`/`detr_decoder`, `geometry_encoder` and `mask_decoder` "
+              "remain fp32 PyTorch. Self-consistency, not ground-truth accuracy."]
+    return "\n".join(parts) + "\n"

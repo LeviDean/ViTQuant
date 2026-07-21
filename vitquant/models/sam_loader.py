@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from transformers import SamModel, SamProcessor, Sam3TrackerModel, Sam3TrackerProcessor
+from transformers import (Sam3Model, Sam3Processor, Sam3TrackerModel,
+                          Sam3TrackerProcessor, SamModel, SamProcessor)
 
 DOWNLOAD_HINT = """SAM checkpoint directory not found: {path}
 
@@ -52,8 +53,17 @@ def load_sam3_model(name: str, checkpoint: str | Path) -> tuple[Sam3TrackerModel
     """SAM 3 (facebook/sam3): the point-promptable tracker head —
     Sam3TrackerModel + Sam3TrackerProcessor, offline. The tracker is the
     SAM1/SAM2-style interactive-segmentation entry point (image + point
-    prompts -> masks), which is what this framework's self-consistency
-    protocol needs; the text-prompted concept-segmentation model (Sam3Model)
-    is out of scope."""
+    prompts -> masks), matching this framework's point-prompt self-consistency
+    protocol. For the text-prompted concept path use load_sam3_concept_model."""
     return _load_offline(Sam3TrackerModel, Sam3TrackerProcessor, name, checkpoint,
+                         SAM3_DOWNLOAD_HINT)
+
+
+def load_sam3_concept_model(name: str, checkpoint: str | Path) -> tuple[Sam3Model, Sam3Processor]:
+    """SAM 3 concept segmentation (text prompts): Sam3Model + Sam3Processor,
+    offline, from the same weights/sam3 checkpoint directory as the tracker —
+    the checkpoint holds the full model; each class loads its own subset
+    (Sam3Model additionally uses the text encoder + DETR decoder, which stay
+    fp32; only the shared PE vision encoder is quantized)."""
+    return _load_offline(Sam3Model, Sam3Processor, name, checkpoint,
                          SAM3_DOWNLOAD_HINT)

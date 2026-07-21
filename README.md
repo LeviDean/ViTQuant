@@ -184,7 +184,18 @@ attn@v matmuls, RoPE and softmax fp32); sensitivity groups are
 `backbone.layers.0..31` + patch embeddings + 4 FPN neck branches (37 groups).
 Note `facebook/sam3` is a **gated** HF repo — request access and accept the
 license first, then export with `Sam3TrackerModel` / `Sam3TrackerProcessor`
-`.save_pretrained('weights/sam3')` (exact command in `configs/sam3.yaml`).
+`.save_pretrained('weights/sam3')` (exact command in `configs/sam3.yaml`;
+an ungated full mirror is also noted there).
+
+SAM3's **text-prompted concept segmentation** is a separate experiment axis
+(`scripts/run_sam3_concept.py` + `configs/sam3_concept.yaml`): each image is
+prompted with its own class name, the model returns every matching instance,
+and fp32-vs-quantized instance sets are greedy-matched by mask IoU —
+consistency = sum(matched IoU) / max(n_fp32, n_quant), so missed and
+hallucinated instances both score zero; detection F1 and matched-pair IoU are
+reported alongside. Only the shared PE vision encoder is quantized; the text
+encoder, DETR decoder and mask head stay fp32. Sensitivity / mixed-precision /
+MSE-clip / SmoothQuant / AdaRound all plug in unchanged.
 
 ### Usage
 

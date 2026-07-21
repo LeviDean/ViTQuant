@@ -270,3 +270,93 @@ def save_sam_qualitative(fp32_model, quant_model, processor, root, num_samples: 
               for r in results]
     (out_dir / "qualitative_sam.json").write_text(json.dumps(summary, indent=2))
     return grid_path
+
+
+# ------------------------- SAM3 concept (text prompt) -----------------------
+
+def _sam3_concept_grid(results: list[dict], model_name: str, out_path: Path,
+                       cols: int = 4) -> None:
+    """Per image: fp32 instances as translucent fills (one color each); quant
+    instances as thin contours — matched ones in their fp32 partner's color,
+    unmatched (hallucinated-by-quant) ones in red."""
+    n = len(results)
+    cols = min(cols, n) if n > 0 else 1
+    n_rows = max(1, (n + cols - 1) // cols)
+    fig, axes = plt.subplots(n_rows, cols, figsize=(cols * 3.2, n_rows * 3.6), squeeze=False)
+    axes = axes.flatten()
+    cmap = plt.get_cmap("tab20")
+    for ax, r in zip(axes, results):
+        ax.imshow(r["image"])
+        fm, qm = r["fp32_masks"], r["quant_masks"]
+        h, w = r["image"].height, r["image"].width
+        overlay = np.zeros((h, w, 4), dtype=float)
+        for i in range(len(fm)):
+            color = cmap(i % 20)
+            overlay[fm[i].numpy()] = (*color[:3], 0.4)
+        ax.imshow(overlay)
+        match_of = {j: i for i, j, _ in r["pairs"]}
+        for j in range(len(qm)):
+            color = cmap(match_of[j] % 20) if j in match_of else (1.0, 0.0, 0.0, 1.0)
+            ax.contour(qm[j].numpy().astype(float), levels=[0.5], colors=[color],
+                      linewidths=0.9)
+        ax.axis("off")
+        ax.set_title(f"\"{r['text']}\"  cons={r['consistency']:.3f} "
+                    f"({r['n_fp32']}fp32/{r['n_quant']}q/{r['n_matched']}m)",
+                    fontsize=8.5,
+                    color="red" if r["consistency"] < SAM_BAD_IOU_THRESHOLD else "black")
+    for ax in axes[n:]:
+        ax.axis("off")
+    fig.suptitle(f"SAM3 concept qualitative: {model_name}\n"
+                f"translucent fill = fp32 instance, same-color line = matched quant "
+                f"instance, red line = unmatched quant instance, sorted worst-first",
+                fontsize=10, y=0.99)
+    fig.subplots_adjust(hspace=0.5, wspace=0.15, top=1 - 0.85 / (n_rows * 3.6))
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+
+
+def save_sam3_concept_qualitative(fp32_model, quant_model, processor, root,
+                                  num_samples: int, device: torch.device,
+                                  out_dir: Path, model_name: str,
+                                  seed: int = 2, download: bool = True) -> Path:
+    """Concept-segmentation counterpart of save_sam_qualitative: for real
+    images + their class-name text prompts, overlay fp32 vs quantized instance
+    sets (greedy-matched), images sorted worst-consistency-first. Writes
+    qualitative_sam3_concept.json and qualitative_sam3_concept_grid.png."""
+    from vitquant.data.sam3_concept_samples import build_sam3_concept_samples
+    from vitquant.eval.sam3_concept_evaluate import (_instances, greedy_match,
+                                                     pairwise_mask_iou)
+    fp32_model = fp32_model.eval().to(device)
+    quant_model = quant_model.eval().to(device)
+    samples = build_sam3_concept_samples(root, processor, num_samples,
+                                         seed=seed, download=download,
+                                         keep_images=True)
+
+    results = []
+    for s in samples:
+        fm = _instances(fp32_model, processor, s, device)
+        qm = _instances(quant_model, processor, s, device)
+        pairs = greedy_match(pairwise_mask_iou(fm, qm))
+        sum_iou = sum(p[2] for p in pairs)
+        denom = max(len(fm), len(qm))
+        results.append({
+            "image": s["image"], "text": s["text"],
+            "fp32_masks": fm, "quant_masks": qm, "pairs": pairs,
+            "n_fp32": len(fm), "n_quant": len(qm), "n_matched": len(pairs),
+            "consistency": 1.0 if denom == 0 else sum_iou / denom,
+        })
+    results.sort(key=lambda r: r["consistency"])  # worst first
+
+    cs = [r["consistency"] for r in results]
+    print(f"    qualitative: {len(results)} samples, "
+         f"consistency mean {sum(cs) / len(cs):.4f}, min {min(cs):.4f}")
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    grid_path = out_dir / "qualitative_sam3_concept_grid.png"
+    _sam3_concept_grid(results, model_name, grid_path)
+    summary = [{k: r[k] for k in
+               ("text", "n_fp32", "n_quant", "n_matched", "consistency")}
+              for r in results]
+    (out_dir / "qualitative_sam3_concept.json").write_text(json.dumps(summary, indent=2))
+    return grid_path

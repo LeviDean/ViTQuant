@@ -1,0 +1,21 @@
+# SAM3 concept segmentation (TEXT prompts) W8A8: each image is prompted with
+# its own Imagenette class name; fp32 and quantized instance sets are matched
+# by mask IoU. Uses the SAME weights/sam3 checkpoint as the tracker configs
+# (the checkpoint holds the full model; Sam3Model additionally runs the fp32
+# text encoder + DETR decoder). Run with scripts/run_sam3_concept.py.
+model:
+  name: facebook/sam3
+  checkpoint: weights/sam3
+
+data:
+  root: data
+  download: true
+  calib_samples: 16       # dev default; raise to 32-64 on GPU
+  eval_samples: 16
+
+quant:
+  weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+
+device: auto
+output_dir: outputs/sam3_concept_w8a8

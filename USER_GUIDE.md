@@ -97,8 +97,9 @@ SamProcessor.from_pretrained('facebook/sam-vit-base').save_pretrained('weights/s
 | `configs/sam_vit_b.yaml` | SAM1 vision encoder 量化（W8A8） |
 | `configs/sam_vit_b_w4a8.yaml` | SAM1 W4A8 朴素 PTQ 基线（服务器生产参数：calib 64 / eval 128 / 4×4 网格） |
 | `configs/sam_vit_b_w4a8_advanced.yaml` | SAM1 W4A8 + 全套高级算法，与上一行同数据同协议直接对比 |
-| `configs/sam3.yaml` | SAM3（facebook/sam3 tracker，PE ViT-L backbone）W8A8 |
+| `configs/sam3.yaml` | SAM3（facebook/sam3 tracker，PE ViT-L backbone）W8A8，点提示 |
 | `configs/sam3_w4a8.yaml` / `sam3_w4a8_advanced.yaml` | SAM3 W4A8 朴素基线 / 全栈高级，成对可比 |
+| `configs/sam3_concept.yaml` | SAM3 **文本提示**概念分割（`run_sam3_concept.py`），实例集自一致性 |
 
 ### 分类配置字段（以 `deit_tiny.yaml` 为例）
 
@@ -237,6 +238,26 @@ Perception-Encoder ViT 注意力（RoPE、q/k/v/o 分离）已做显式矩阵乘
 > **SAM3 权重是 gated 仓库**：先在 https://huggingface.co/facebook/sam3 申请访问并同意
 > 许可，然后在能联网的机器上 `hf auth login` 后执行 `configs/sam3.yaml` 顶部注释里的
 > 导出命令，把 `weights/sam3/` 目录拷到离线机器。框架本身永不联网下载权重。
+> 也可用非 gated 完整镜像 `Justin331/sam3`（命令同在配置注释里；研究用途）。
+
+### SAM3 文本提示（概念分割）
+
+```bash
+python scripts/run_sam3_concept.py --config configs/sam3_concept.yaml
+```
+
+与点提示不同的实验轴：每张图用**它自己的类别名**做文本 prompt（如 "gas pump"），模型返回
+图中该概念的**所有实例**。fp32 与量化模型的实例集数量可能不同，评估先按 mask IoU 贪心匹配，再报：
+
+| 指标 | 含义 |
+|---|---|
+| `consistency` | Σ(匹配对 IoU) / max(fp32 实例数, 量化实例数)——漏检和幻检都计 0 分；敏感度/混合精度用这个标量 |
+| `detection F1` | 实例数量层面的一致率 |
+| `matched IoU` | 只看匹配上的对的 mask 质量 |
+
+量化对象仍然只有共享的 PE vision encoder；文本编码器、DETR 解码器、mask head 全部保持
+fp32。文本链路更长（视觉特征还要和文本特征做匹配），预期比点提示协议对量化**更敏感**，
+是更严苛的考题。定性图:fp32 实例半透明填充、匹配的量化实例同色细线、未匹配的量化实例红线。
 
 只量化 `vision_encoder`（ViT backbone），`prompt_encoder`/`mask_decoder` 保持 fp32。按顺序跑：
 
