@@ -8,6 +8,12 @@
 #   python -c "from transformers import Sam3TrackerModel, Sam3TrackerProcessor; \
 #   Sam3TrackerModel.from_pretrained('facebook/sam3').save_pretrained('weights/sam3'); \
 #   Sam3TrackerProcessor.from_pretrained('facebook/sam3').save_pretrained('weights/sam3')"
+# Ungated full mirror (verified: real-weight smoke produces correct masks;
+# license is still Meta's SAM License — for research use, clear the official
+# gate before any commercial use):
+#   hf download Justin331/sam3 --local-dir weights/sam3 \
+#     --include config.json model.safetensors processor_config.json \
+#               "tokenizer*" special_tokens_map.json vocab.json merges.txt
 model:
   family: sam3
   name: facebook/sam3
