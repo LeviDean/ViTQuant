@@ -24,6 +24,7 @@ from vitquant.models.loader import load_model
 from vitquant.quant.adaround import adaround
 from vitquant.quant.calibrate import calibrate
 from vitquant.quant.convert import convert_vit
+from vitquant.quant.persist import save_quantized
 from vitquant.quant.smoothquant import smooth_quant
 from vitquant.quant.qconfig import QConfig, qconfig_from_dict
 from vitquant.utils.config import load_config
@@ -60,6 +61,10 @@ def main() -> None:
     ap.add_argument("--no-qualitative", action="store_true",
                     help="skip the per-image visualization grid")
     ap.add_argument("--qualitative-samples", type=int, default=30)
+    ap.add_argument("--save-quantized", action="store_true",
+                    help="save the calibrated quantization state (quantized_state.pt + "
+                         "quant_meta.json) into output_dir for later reuse without "
+                         "recalibration/AdaRound")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -108,6 +113,16 @@ def main() -> None:
                  max_tokens=int(ar.get("max_tokens", 2048)),
                  log=lambda msg: print(f"    [adaround] {msg}"))
         results["adaround"] = {"iters": ar_iters}
+    if args.save_quantized:
+        meta = {"model": cfg["model"]["name"], "family": "classification",
+                "checkpoint": cfg["model"]["checkpoint"], "quant": cfg["quant"]}
+        if sq.get("enabled"):
+            meta["smoothquant"] = {"alpha": float(sq.get("alpha", 0.5))}
+        if ar.get("enabled"):
+            meta["adaround"] = {"iters": int(ar.get("iters", 1000))}
+        print(f"Saved quantized state to "
+             f"{save_quantized(qmodel, cfg['output_dir'], meta)}")
+
     print(f"[2/6] simulated INT8: evaluating ({n_val} batches)")
     results["int8_simulated"] = evaluate_torch(qmodel, val, CLS, device, max_b,
                                                progress=batch_progress("int8 sim", n_val))

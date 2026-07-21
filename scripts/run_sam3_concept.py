@@ -20,6 +20,7 @@ from vitquant.eval.sam3_concept_evaluate import (block_sensitivity_sam3_concept,
                                                  evaluate_sam3_concept_consistency,
                                                  mixed_precision_sweep_sam3_concept)
 from vitquant.models.sam_loader import load_sam3_concept_model
+from vitquant.quant.persist import save_quantized
 from vitquant.quant.qconfig import qconfig_from_dict
 from vitquant.quant.sam_calibrate import adaround_sam, calibrate_sam, smooth_quant_sam
 from vitquant.quant.sam_convert import convert_sam_vision_encoder
@@ -42,6 +43,9 @@ def main() -> None:
     ap.add_argument("--no-qualitative", action="store_true",
                     help="skip the per-image instance-overlay grid")
     ap.add_argument("--qualitative-samples", type=int, default=8)
+    ap.add_argument("--save-quantized", action="store_true",
+                    help="save the calibrated quantization state into output_dir for "
+                         "later label-free inference via scripts/infer_sam.py")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -81,6 +85,16 @@ def main() -> None:
                      reg_weight=float(ar.get("reg_weight", 0.01)),
                      max_tokens=int(ar.get("max_tokens", 2048)),
                      log=lambda msg: print(f"    [adaround] {msg}"))
+
+    if args.save_quantized:
+        meta = {"model": cfg["model"]["name"], "family": "sam3_concept",
+                "checkpoint": cfg["model"]["checkpoint"], "quant": cfg["quant"]}
+        if sq.get("enabled"):
+            meta["smoothquant"] = {"alpha": float(sq.get("alpha", 0.5))}
+        if ar.get("enabled"):
+            meta["adaround"] = {"iters": int(ar.get("iters", 1000))}
+        path = save_quantized(quant_model, cfg["output_dir"], meta)
+        print(f"Saved quantized state to {path}")
 
     print("Evaluating instance-set self-consistency (fp32 vs fake-quant) ...")
     sim_result = evaluate_sam3_concept_consistency(
