@@ -77,8 +77,16 @@ def _save_overlay(img, masks, out_png, title, points=None):
     overlay = np.zeros((img.height, img.width, 4))
     for i, m in enumerate(masks):
         color = cmap(i % 20)
-        overlay[m] = (*color[:3], 0.45)
+        overlay[m] = (*color[:3], 0.35)
     ax.imshow(overlay)
+    # Emphasized boundary: a solid white underlay with the instance-colored
+    # dashed line on top — the dash gaps expose the white, reading as a
+    # double line that stays visible on any background.
+    for i, m in enumerate(masks):
+        mf = m.astype(float)
+        ax.contour(mf, levels=[0.5], colors="white", linewidths=2.8)
+        ax.contour(mf, levels=[0.5], colors=[cmap(i % 20)], linewidths=1.5,
+                  linestyles="dashed")
     if points:
         xs, ys = zip(*points)
         ax.scatter(xs, ys, marker="o", s=14, c="white", edgecolors="black", linewidths=0.5)
