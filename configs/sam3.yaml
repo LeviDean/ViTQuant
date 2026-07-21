@@ -1,0 +1,28 @@
+# SAM3 (facebook/sam3, point-promptable tracker) W8A8: quantize only the
+# Perception-Encoder ViT backbone (vision_encoder), report fp32-vs-quantized
+# mask self-consistency IoU. Same protocol as SAM1's sam_vit_b.yaml so the two
+# generations compare directly.
+#
+# NOTE: facebook/sam3 is a GATED HF repo — request access + accept the license
+# on https://huggingface.co/facebook/sam3 first, then (with `hf auth login`):
+#   python -c "from transformers import Sam3TrackerModel, Sam3TrackerProcessor; \
+#   Sam3TrackerModel.from_pretrained('facebook/sam3').save_pretrained('weights/sam3'); \
+#   Sam3TrackerProcessor.from_pretrained('facebook/sam3').save_pretrained('weights/sam3')"
+model:
+  family: sam3
+  name: facebook/sam3
+  checkpoint: weights/sam3
+
+data:
+  root: data
+  download: true
+  calib_samples: 16       # dev default; ViT-L-scale backbone at 1008² — raise on GPU only
+  eval_samples: 16
+  prompt_grid: 4          # whole-image protocol: 4x4 point prompts per eval image
+
+quant:
+  weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+
+device: auto
+output_dir: outputs/sam3_w8a8

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from transformers import SamModel, SamProcessor
+from transformers import SamModel, SamProcessor, Sam3TrackerModel, Sam3TrackerProcessor
 
 DOWNLOAD_HINT = """SAM checkpoint directory not found: {path}
 
@@ -12,20 +12,48 @@ SamProcessor.from_pretrained('{name}').save_pretrained('{filename}')"
 
 then copy the '{filename}' directory to {path}."""
 
+SAM3_DOWNLOAD_HINT = """SAM3 checkpoint directory not found: {path}
 
-def load_sam_model(name: str, checkpoint: str | Path) -> tuple[SamModel, SamProcessor]:
-    """Load a SAM model + processor offline from a local HF-format checkpoint
-    directory (config.json + weights, produced by save_pretrained). Never
-    touches the network — pass local_files_only=True to from_pretrained."""
+This framework never downloads model weights. facebook/sam3 is a GATED repo:
+first request access on https://huggingface.co/{name} (accept the license),
+then on a machine with network access and `hf auth login` done, run:
+
+    python -c "from transformers import Sam3TrackerModel, Sam3TrackerProcessor; \\
+Sam3TrackerModel.from_pretrained('{name}').save_pretrained('{filename}'); \\
+Sam3TrackerProcessor.from_pretrained('{name}').save_pretrained('{filename}')"
+
+then copy the '{filename}' directory to {path}."""
+
+
+def _load_offline(model_cls, processor_cls, name: str, checkpoint: str | Path,
+                  hint: str):
+    """Shared offline-loading skeleton: local HF-format checkpoint directory
+    (config.json + weights, produced by save_pretrained), never touching the
+    network — local_files_only=True on both from_pretrained calls."""
     path = Path(checkpoint)
     if not path.exists():
-        raise FileNotFoundError(
-            DOWNLOAD_HINT.format(path=path, name=name, filename=path.name))
+        raise FileNotFoundError(hint.format(path=path, name=name, filename=path.name))
     try:
-        model = SamModel.from_pretrained(str(path), local_files_only=True)
-        processor = SamProcessor.from_pretrained(str(path), local_files_only=True)
+        model = model_cls.from_pretrained(str(path), local_files_only=True)
+        processor = processor_cls.from_pretrained(str(path), local_files_only=True)
     except OSError as e:
         # directory exists but is incomplete/corrupt (e.g. missing weights file)
         raise FileNotFoundError(
-            DOWNLOAD_HINT.format(path=path, name=name, filename=path.name)) from e
+            hint.format(path=path, name=name, filename=path.name)) from e
     return model.eval(), processor
+
+
+def load_sam_model(name: str, checkpoint: str | Path) -> tuple[SamModel, SamProcessor]:
+    """SAM 1 (facebook/sam-vit-*): SamModel + SamProcessor, offline."""
+    return _load_offline(SamModel, SamProcessor, name, checkpoint, DOWNLOAD_HINT)
+
+
+def load_sam3_model(name: str, checkpoint: str | Path) -> tuple[Sam3TrackerModel, Sam3TrackerProcessor]:
+    """SAM 3 (facebook/sam3): the point-promptable tracker head —
+    Sam3TrackerModel + Sam3TrackerProcessor, offline. The tracker is the
+    SAM1/SAM2-style interactive-segmentation entry point (image + point
+    prompts -> masks), which is what this framework's self-consistency
+    protocol needs; the text-prompted concept-segmentation model (Sam3Model)
+    is out of scope."""
+    return _load_offline(Sam3TrackerModel, Sam3TrackerProcessor, name, checkpoint,
+                         SAM3_DOWNLOAD_HINT)

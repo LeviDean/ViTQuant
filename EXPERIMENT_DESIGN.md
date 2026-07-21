@@ -55,7 +55,8 @@
 | `facebook/sam-vit-base` | 分割（仅 vision encoder） | 分类之外的第二个任务类型，验证结论是否可迁移 | [configs/sam_vit_b.yaml](configs/sam_vit_b.yaml) |
 
 选两个不同规格的分类模型（tiny 用于开发迭代、base 用于正式结果）+ 一个结构不同的分割模型
-（SAM 的 ViT backbone 有 windowed attention，和标准 ViT 不同），是为了让敏感度/消融结论不只
+（SAM1 的 ViT backbone 有 windowed attention；SAM3 的 Perception-Encoder ViT-L 有
+RoPE + 窗口/全局混合注意力，均与标准 ViT 不同），是为了让敏感度/消融结论不只
 建立在单一模型规格上。
 
 分类模型量化范围：所有 `nn.Linear`（含 attention 的 qkv/proj 和 MLP）、`nn.Conv2d`（patch

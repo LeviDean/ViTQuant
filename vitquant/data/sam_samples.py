@@ -26,7 +26,8 @@ def grid_points(width: int, height: int, n: int) -> list[tuple[int, int]]:
             for j in range(n) for i in range(n)]
 
 
-def _processor_inputs(processor, img, grid: int) -> tuple[dict, list[tuple[int, int]]]:
+def _processor_inputs(processor, img, grid: int,
+                      with_labels: bool = False) -> tuple[dict, list[tuple[int, int]]]:
     """Run the processor on a single PIL image with an n×n grid of point
     prompts (grid=1: just the image center), returning the model-ready inputs
     dict and the points actually used. Each grid point is its own point-prompt
@@ -35,14 +36,22 @@ def _processor_inputs(processor, img, grid: int) -> tuple[dict, list[tuple[int, 
     prompt-encoder/mask-decoder repeat per point. Shared by build_sam_inputs
     and build_sam_qualitative_samples so the processor-call and dtype-fix
     logic can't drift apart either.
+    with_labels adds a foreground label (1) per point — the SAM2/SAM3 tracker
+    API requires explicit labels with point prompts; SAM1 treats unlabeled
+    points as foreground, so its inputs are left unchanged (bit-identical to
+    the pre-SAM3 pipeline).
     SamProcessor emits input_points as float64, which MPS can't run ops on
     (int64 sizes are fine there, only float64 is unsupported); float32 has
     ample precision for pixel coordinates."""
     w, h = img.size
     points = grid_points(w, h, grid)
-    # shape per image: (point_batch=n*n, points_per_group=1, 2)
+    # shapes per image: points (point_batch=n*n, points_per_group=1, 2),
+    # labels (point_batch=n*n, points_per_group=1)
+    kwargs = {}
+    if with_labels:
+        kwargs["input_labels"] = [[[1] for _ in points]]
     inputs = processor(images=img, input_points=[[[list(p)] for p in points]],
-                       return_tensors="pt")
+                       return_tensors="pt", **kwargs)
     inputs = {k: (v.float() if v.dtype == torch.float64 else v)
              for k, v in inputs.items()}
     return inputs, points
@@ -50,26 +59,27 @@ def _processor_inputs(processor, img, grid: int) -> tuple[dict, list[tuple[int, 
 
 def build_sam_inputs(root: str | Path, processor, num_samples: int = 8,
                      seed: int = 0, download: bool = True,
-                     grid: int = 1) -> list[dict]:
+                     grid: int = 1, with_labels: bool = False) -> list[dict]:
     """A seeded-random subset of real Imagenette images (raw PIL, no
     classification transform — SAM doesn't care about ImageNet classes), each
     run through the given SAM processor with an n×n grid of point prompts
     (grid=1: single image-center point, the old behavior) to produce
-    ready-to-feed `model(**inputs)` dicts. Reuses whatever Imagenette copy the
-    classification pipeline already has."""
+    ready-to-feed `model(**inputs)` dicts. with_labels=True adds foreground
+    labels per point (required by the SAM3 tracker API). Reuses whatever
+    Imagenette copy the classification pipeline already has."""
     ds, idx = _sample_indices(root, download, num_samples, seed)
 
     samples = []
     for i in idx:
         img, _ = ds[i]  # raw PIL Image; classification label is irrelevant here
-        inputs, _ = _processor_inputs(processor, img, grid)
+        inputs, _ = _processor_inputs(processor, img, grid, with_labels)
         samples.append(inputs)
     return samples
 
 
 def build_sam_qualitative_samples(root: str | Path, processor, num_samples: int = 8,
                                   seed: int = 0, download: bool = True,
-                                  grid: int = 1) -> list[dict]:
+                                  grid: int = 1, with_labels: bool = False) -> list[dict]:
     """Like build_sam_inputs, but also retains the raw PIL image and the point
     prompts used, for visualization. Each returned dict has keys: "inputs"
     (model-ready dict, same construction as build_sam_inputs), "image" (PIL
@@ -79,6 +89,6 @@ def build_sam_qualitative_samples(root: str | Path, processor, num_samples: int 
     samples = []
     for i in idx:
         img, _ = ds[i]  # raw PIL Image; classification label is irrelevant here
-        inputs, points = _processor_inputs(processor, img, grid)
+        inputs, points = _processor_inputs(processor, img, grid, with_labels)
         samples.append({"inputs": inputs, "image": img, "points": points})
     return samples

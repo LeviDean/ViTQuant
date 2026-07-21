@@ -1,0 +1,30 @@
+# SAM3 W4A8 with the full advanced-PTQ stack (server/GPU production):
+# MSE-optimal clipping + SmoothQuant + AdaRound. Same data/protocol as
+# sam3_w4a8.yaml (the naive baseline) so the two reports compare directly.
+# See configs/sam3.yaml for how to fetch the gated facebook/sam3 weights.
+model:
+  family: sam3
+  name: facebook/sam3
+  checkpoint: weights/sam3
+
+data:
+  root: data
+  download: false           # server: data pre-copied
+  calib_samples: 32
+  eval_samples: 64
+  prompt_grid: 4
+
+quant:
+  weight: {bits: 4, symmetric: true, per_channel: true, observer: mse}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: mse}
+
+smoothquant:
+  enabled: true
+  alpha: 0.5
+
+adaround:
+  enabled: true
+  iters: 1000               # 32 layers x 1000 iters — budget several GPU-hours
+
+device: auto
+output_dir: outputs/sam3_w4a8_advanced

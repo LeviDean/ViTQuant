@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from transformers.models.sam3.modeling_sam3 import apply_rotary_pos_emb_2d
+
 from vitquant.quant.modules import QuantLinear, QuantMatMul
 from vitquant.quant.qconfig import QConfig
 
@@ -73,4 +75,49 @@ class QuantSamAttention(nn.Module):
         attn_output = self.av_matmul(attn_probs, value).reshape(batch_size, self.num_attention_heads, height, width, -1)
         attn_output = attn_output.permute(0, 2, 3, 1, 4).reshape(batch_size, height, width, -1)
         attn_output = self.proj(attn_output)
+        return attn_output, attn_weights
+
+
+class QuantSam3ViTAttention(nn.Module):
+    """SAM3's Perception-Encoder ViT attention (RoPE, separate q/k/v/o
+    projections), rewritten with explicit matmuls so q@k^T and attn@v can be
+    fake-quantized. All four projections become QuantLinear; RoPE rotation and
+    softmax stay fp32 (RoPE is a fixed unitary rotation — same design decision
+    as keeping the relative-position addition fp32 in QuantSamAttention). The
+    q@k^T inputs are quantized post-RoPE, which is what a fused int8 attention
+    kernel would see."""
+
+    @classmethod
+    def from_float(cls, attn: nn.Module, qconfig: QConfig) -> "QuantSam3ViTAttention":
+        new = cls.__new__(cls)
+        nn.Module.__init__(new)
+        new.num_attention_heads = attn.num_attention_heads
+        new.head_dim = attn.head_dim
+        new.scaling = attn.scaling
+        new.attention_dropout = attn.attention_dropout  # plain float
+        new.q_proj = QuantLinear.from_float(attn.q_proj, qconfig)
+        new.k_proj = QuantLinear.from_float(attn.k_proj, qconfig)
+        new.v_proj = QuantLinear.from_float(attn.v_proj, qconfig)
+        new.o_proj = QuantLinear.from_float(attn.o_proj, qconfig)
+        new.qk_matmul = QuantMatMul(qconfig)
+        new.av_matmul = QuantMatMul(qconfig)
+        return new
+
+    def forward(self, hidden_states: torch.Tensor,
+                position_embeddings: tuple[torch.Tensor, torch.Tensor],
+                **kwargs):
+        batch_size, height, width, _ = hidden_states.shape
+        seq_len = height * width
+        shape = (batch_size, seq_len, self.num_attention_heads, self.head_dim)
+        query = self.q_proj(hidden_states).view(*shape).transpose(1, 2)
+        key = self.k_proj(hidden_states).view(*shape).transpose(1, 2)
+        value = self.v_proj(hidden_states).view(*shape).transpose(1, 2)
+        cos, sin = position_embeddings
+        query, key = apply_rotary_pos_emb_2d(query, key, cos=cos, sin=sin)
+        attn_weights = self.qk_matmul(query * self.scaling, key.transpose(-2, -1))
+        attn_weights = F.softmax(attn_weights, dtype=torch.float32, dim=-1).to(query.dtype)
+        attn_weights = F.dropout(attn_weights, p=self.attention_dropout if self.training else 0.0)
+        attn_output = self.av_matmul(attn_weights, value)  # (B, heads, seq, head_dim)
+        attn_output = attn_output.transpose(1, 2).reshape(batch_size, height, width, -1).contiguous()
+        attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights

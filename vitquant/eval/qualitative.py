@@ -133,6 +133,16 @@ def save_classification_qualitative(fp32_model, qmodel, data_cfg: dict, root,
 
 # --------------------------------- SAM ------------------------------------
 
+def _post_process_masks(processor, pred_masks, inputs):
+    """Upscale low-res mask logits to original image resolution, handling both
+    processor APIs: SAM1 needs reshaped_input_sizes (non-square resize+pad),
+    SAM3's tracker resizes square and only needs original_sizes. Dispatch on
+    the inputs dict itself so no family flag has to be threaded through."""
+    if "reshaped_input_sizes" in inputs:  # SAM1
+        return processor.image_processor.post_process_masks(
+            pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])
+    return processor.post_process_masks(pred_masks, inputs["original_sizes"])
+
 def _draw_sam_single_point(ax, r: dict) -> None:
     """Single-point style: fp32 mask as translucent lime fill, quantized mask
     as a thin magenta boundary, star at the prompt point."""
@@ -202,7 +212,8 @@ def _sam_grid(results: list[dict], model_name: str, out_path: Path, cols: int = 
 
 def save_sam_qualitative(fp32_model, quant_model, processor, root, num_samples: int,
                          device: torch.device, out_dir: Path, model_name: str,
-                         seed: int = 2, download: bool = True, grid: int = 1) -> Path:
+                         seed: int = 2, download: bool = True, grid: int = 1,
+                         with_labels: bool = False) -> Path:
     """For real sample images + point prompts (grid=1: single center point;
     grid=n: an n×n grid covering the whole image), overlay fp32 vs quantized
     SAM masks per point (the hypothesis fp32's own iou_scores ranks best, used
@@ -214,7 +225,8 @@ def save_sam_qualitative(fp32_model, quant_model, processor, root, num_samples: 
     fp32_model = fp32_model.eval().to(device)
     quant_model = quant_model.eval().to(device)
     samples = build_sam_qualitative_samples(root, processor, num_samples,
-                                            seed=seed, download=download, grid=grid)
+                                            seed=seed, download=download, grid=grid,
+                                            with_labels=with_labels)
 
     results = []
     for s in samples:
@@ -223,10 +235,8 @@ def save_sam_qualitative(fp32_model, quant_model, processor, root, num_samples: 
             fp32_out = fp32_model(**inputs)
             quant_out = quant_model(**inputs)
         # post_process_masks -> per-image tensor (num_points, num_masks, H, W)
-        fp32_full = processor.image_processor.post_process_masks(
-            fp32_out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0]
-        quant_full = processor.image_processor.post_process_masks(
-            quant_out.pred_masks, inputs["original_sizes"], inputs["reshaped_input_sizes"])[0]
+        fp32_full = _post_process_masks(processor, fp32_out.pred_masks, inputs)[0]
+        quant_full = _post_process_masks(processor, quant_out.pred_masks, inputs)[0]
         per_point = []
         for p, point in enumerate(s["points"]):
             fp32_best_idx = int(fp32_out.iou_scores[0, p].argmax())

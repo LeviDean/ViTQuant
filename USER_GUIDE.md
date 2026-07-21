@@ -94,9 +94,11 @@ SamProcessor.from_pretrained('facebook/sam-vit-base').save_pretrained('weights/s
 | `configs/vit_base.yaml` | 分类大模型，服务器完整评估 |
 | `configs/deit_tiny_w4a8.yaml` | W4A8 朴素 PTQ 基线（4-bit 权重），研究低位宽精度代价 |
 | `configs/deit_tiny_w4a8_advanced.yaml` | W4A8 + 全套高级算法（MSE 截断 + SmoothQuant + AdaRound），与上一行直接对比 |
-| `configs/sam_vit_b.yaml` | SAM vision encoder 量化（W8A8） |
-| `configs/sam_vit_b_w4a8.yaml` | SAM W4A8 朴素 PTQ 基线（服务器生产参数：calib 64 / eval 128 / 4×4 网格） |
-| `configs/sam_vit_b_w4a8_advanced.yaml` | SAM W4A8 + 全套高级算法，与上一行同数据同协议直接对比 |
+| `configs/sam_vit_b.yaml` | SAM1 vision encoder 量化（W8A8） |
+| `configs/sam_vit_b_w4a8.yaml` | SAM1 W4A8 朴素 PTQ 基线（服务器生产参数：calib 64 / eval 128 / 4×4 网格） |
+| `configs/sam_vit_b_w4a8_advanced.yaml` | SAM1 W4A8 + 全套高级算法，与上一行同数据同协议直接对比 |
+| `configs/sam3.yaml` | SAM3（facebook/sam3 tracker，PE ViT-L backbone）W8A8 |
+| `configs/sam3_w4a8.yaml` / `sam3_w4a8_advanced.yaml` | SAM3 W4A8 朴素基线 / 全栈高级，成对可比 |
 
 ### 分类配置字段（以 `deit_tiny.yaml` 为例）
 
@@ -220,11 +222,21 @@ python scripts/run_classification.py --config configs/vit_base.yaml
 
 ---
 
-## 5. 使用：SAM
+## 5. 使用：SAM（SAM1 与 SAM3）
 
 ```bash
-python scripts/run_sam.py --config configs/sam_vit_b.yaml
+python scripts/run_sam.py --config configs/sam_vit_b.yaml   # SAM1 ViT-B
+python scripts/run_sam.py --config configs/sam3.yaml        # SAM3（PE ViT-L backbone）
 ```
+
+同一个脚本同时支持两代 SAM，由配置里的 `model.family`（`sam` / `sam3`）区分。
+SAM3 走 `Sam3TrackerModel`（点提示交互分割入口，与 SAM1 协议同构），其
+Perception-Encoder ViT 注意力（RoPE、q/k/v/o 分离）已做显式矩阵乘量化重写，
+敏感度按 `backbone.layers.N` + patch_embeddings + 4 个 FPN neck 分支分组（共 37 组）。
+
+> **SAM3 权重是 gated 仓库**：先在 https://huggingface.co/facebook/sam3 申请访问并同意
+> 许可，然后在能联网的机器上 `hf auth login` 后执行 `configs/sam3.yaml` 顶部注释里的
+> 导出命令，把 `weights/sam3/` 目录拷到离线机器。框架本身永不联网下载权重。
 
 只量化 `vision_encoder`（ViT backbone），`prompt_encoder`/`mask_decoder` 保持 fp32。按顺序跑：
 

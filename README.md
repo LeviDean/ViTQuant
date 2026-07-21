@@ -173,6 +173,19 @@ SamProcessor.from_pretrained('facebook/sam-vit-base').save_pretrained('weights/s
 Copy (or generate directly on the target machine) the resulting
 `weights/sam-vit-base/` directory before running offline.
 
+### SAM3 support
+
+The same pipeline also runs **SAM3** (`configs/sam3*.yaml`, selected via
+`model.family: sam3`), through its point-promptable tracker head
+(`Sam3TrackerModel`) so the protocol stays identical to SAM1. The
+Perception-Encoder ViT-L backbone (32 layers, RoPE attention, 1008² input) is
+converted with a dedicated `QuantSam3ViTAttention` rewrite (explicit q@k^T /
+attn@v matmuls, RoPE and softmax fp32); sensitivity groups are
+`backbone.layers.0..31` + patch embeddings + 4 FPN neck branches (37 groups).
+Note `facebook/sam3` is a **gated** HF repo — request access and accept the
+license first, then export with `Sam3TrackerModel` / `Sam3TrackerProcessor`
+`.save_pretrained('weights/sam3')` (exact command in `configs/sam3.yaml`).
+
 ### Usage
 
 ```bash
