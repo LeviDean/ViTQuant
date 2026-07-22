@@ -298,6 +298,9 @@ python scripts/run_sam.py --config configs/sam3_w4a8_advanced.yaml --save-quanti
 python scripts/infer_sam.py --artifact outputs/sam3_w4a8_advanced --images 测试集目录/
 # 文本推理:指定要找的概念,输出全图所有实例
 python scripts/infer_sam.py --artifact outputs/sam3_w4a8_advanced --images 目录/ --text "gas pump"
+
+# 量化前(fp32)对照:同一命令加 --fp32,跑原始模型,默认输出到 inference_fp32/
+python scripts/infer_sam.py --artifact outputs/sam3_w4a8_advanced --images 目录/ --fp32
 ```
 
 **同一个 SAM3 产物,点提示和文本推理都能用**:tracker 与文本概念模型共享同一个被量化的

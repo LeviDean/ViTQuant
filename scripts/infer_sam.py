@@ -23,7 +23,9 @@ from PIL import Image
 
 from vitquant.data.sam_samples import grid_points
 from vitquant.eval.qualitative import _post_process_masks
-from vitquant.quant.persist import load_quantized_sam
+from vitquant.models.sam_loader import (load_sam3_concept_model, load_sam3_model,
+                                        load_sam_model)
+from vitquant.quant.persist import load_quantized_sam, read_meta
 from vitquant.utils.device import resolve_device
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -111,6 +113,10 @@ def main() -> None:
     ap.add_argument("--text", default=None,
                     help="sam3_concept artifacts: the concept phrase to segment "
                          "(applied to every image)")
+    ap.add_argument("--fp32", action="store_true",
+                    help="run the ORIGINAL fp32 model instead of the quantized one "
+                         "(same checkpoint/family from the artifact's meta) — the "
+                         "pre-quantization reference for side-by-side comparison")
     ap.add_argument("--device", default="auto")
     args = ap.parse_args()
 
@@ -122,8 +128,22 @@ def main() -> None:
     meta_family = None
     if args.text:
         meta_family = "sam3_concept"
-    model, processor, meta = load_quantized_sam(args.artifact, device=device,
-                                                family=meta_family)
+    if args.fp32:
+        # pre-quantization reference: same checkpoint + family resolution as
+        # the quantized path, but no convert / no quantization state.
+        meta = read_meta(args.artifact)
+        family = meta_family or meta["family"]
+        if args.text and meta["family"] == "sam":
+            ap.error("--text needs a SAM3 artifact (SAM1 has no text path)")
+        loaders = {"sam": load_sam_model, "sam3": load_sam3_model,
+                   "sam3_concept": load_sam3_concept_model}
+        model, processor = loaders[family](meta["model"], meta["checkpoint"])
+        model = model.to(device)
+        meta = {**meta, "family": family}
+        print(f"    loaded ORIGINAL fp32 model ({family})")
+    else:
+        model, processor, meta = load_quantized_sam(args.artifact, device=device,
+                                                    family=meta_family)
     family = meta["family"]
     if family == "sam3_concept" and not args.text:
         ap.error("--text is required for concept (text-prompt) inference")
@@ -131,11 +151,13 @@ def main() -> None:
     images = _list_images(Path(args.images))
     if not images:
         ap.error(f"no images found under {args.images}")
-    out_dir = Path(args.out) if args.out else Path(args.artifact) / "inference"
+    default_sub = "inference_fp32" if args.fp32 else "inference"
+    out_dir = Path(args.out) if args.out else Path(args.artifact) / default_sub
     out_dir.mkdir(parents=True, exist_ok=True)
 
     grid = args.prompt_grid or meta.get("prompt_grid", 4)
-    scheme = f"W{meta['quant']['weight']['bits']}A{meta['quant']['activation']['bits']}"
+    scheme = ("fp32" if args.fp32 else
+              f"W{meta['quant']['weight']['bits']}A{meta['quant']['activation']['bits']}")
     print(f"{family} {scheme}: {len(images)} image(s) -> {out_dir}")
 
     for path in images:
@@ -152,7 +174,8 @@ def main() -> None:
             extra = {"points": np.array(points)}
         np.savez_compressed(out_dir / f"{path.stem}_masks.npz", masks=masks, **extra)
         _save_overlay(img, masks, out_dir / f"{path.stem}_overlay.png",
-                      f"{path.name} · {scheme} quantized · {note}", points)
+                      f"{path.name} · {scheme}{'' if args.fp32 else ' quantized'} · {note}",
+                      points)
         print(f"  {path.name}: {len(masks)} mask(s)")
 
     print(f"Done. Masks (.npz) and overlays (.png) in {out_dir}")
