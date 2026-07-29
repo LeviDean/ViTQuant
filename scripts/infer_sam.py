@@ -156,8 +156,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     grid = args.prompt_grid or meta.get("prompt_grid", 4)
+    from vitquant.eval.report import scheme_str
+    qw, qa = meta["quant"]["weight"], meta["quant"]["activation"]
     scheme = ("fp32" if args.fp32 else
-              f"W{meta['quant']['weight']['bits']}A{meta['quant']['activation']['bits']}")
+              scheme_str(qw["bits"], qa["bits"], qw.get("fmt", "int"),
+                         qa.get("fmt", "int")))
     print(f"{family} {scheme}: {len(images)} image(s) -> {out_dir}")
 
     for path in images:

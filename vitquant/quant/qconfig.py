@@ -10,6 +10,9 @@ class TensorQConfig:
     ch_axis: int = 0
     observer: str = "minmax"  # minmax | moving_avg | percentile
     percentile: float = 0.999  # only used by PercentileObserver
+    # "int": uniform integer lattice (default). "fp4": E2M1 floating-point grid
+    # (bits must be 4; inherently symmetric, zero_point unused; AdaRound n/a).
+    fmt: str = "int"
 
 
 @dataclass(frozen=True)

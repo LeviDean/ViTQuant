@@ -125,6 +125,8 @@ def main() -> None:
         "family": family,
         "device": str(device),
         "weight_bits": base_qc.weight.bits,
+        "weight_fmt": base_qc.weight.fmt,
+        "activation_fmt": base_qc.activation.fmt,
         "activation_bits": base_qc.activation.bits,
         "prompt_grid": grid,
         "iou_simulated": sim_result,

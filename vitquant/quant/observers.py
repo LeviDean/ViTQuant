@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from vitquant.quant.formats import FP4_AMAX, fp4_round
 from vitquant.quant.qconfig import TensorQConfig
 
 
@@ -20,6 +21,12 @@ def qparams_from_range(min_val: torch.Tensor, max_val: torch.Tensor,
     """scale/zero_point from a clip range, the single formula shared by every
     observer (and by MSEObserver's candidate search, so a searched range yields
     exactly the qparams that compute_qparams will later derive from it)."""
+    if cfg.fmt == "fp4":
+        # FP4's grid is sign-symmetric with largest magnitude 6: map the
+        # observed amax onto 6. zero_point does not exist in this format.
+        amax = torch.maximum(max_val.abs(), min_val.abs())
+        scale = torch.clamp(amax / FP4_AMAX, min=1e-12)
+        return scale, torch.zeros_like(scale)
     qmin, qmax = qrange(cfg.bits, cfg.symmetric)
     # Range must include 0 so that real zero is exactly representable.
     min_val = torch.minimum(min_val, torch.zeros_like(min_val))
@@ -143,7 +150,10 @@ class MSEObserver(ObserverBase):
             lo, hi = alpha * lo_full, alpha * hi_full
             scale, zp = qparams_from_range(lo, hi, self.cfg)
             scale, zp = scale.unsqueeze(1), zp.unsqueeze(1)
-            dq = (torch.clamp(torch.round(rows / scale) + zp, qmin, qmax) - zp) * scale
+            if self.cfg.fmt == "fp4":
+                dq = fp4_round(rows / scale) * scale
+            else:
+                dq = (torch.clamp(torch.round(rows / scale) + zp, qmin, qmax) - zp) * scale
             err = ((dq - rows) ** 2).mean(dim=1)
             better = err < best_err
             best_err = torch.where(better, err, best_err)

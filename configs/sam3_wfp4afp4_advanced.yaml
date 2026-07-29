@@ -1,0 +1,33 @@
+# SAM3 W-FP4 A-FP4: FP4 (E2M1) for BOTH weights and activations.
+# The key question after INT W4A4 collapsed (self-consistency IoU 0.095):
+# is the A4 cliff a bit-budget problem or a grid-shape problem? FP4's
+# non-uniform grid spends its 15 levels where bell-shaped activation
+# distributions actually live, so if outlier resolution is the bottleneck
+# this run should recover a large part of the gap at the same 4-bit cost.
+# Same data/protocol as sam3_w4a4 runs. AdaRound off (uniform-grid method).
+# See configs/sam3.yaml for how to fetch the gated facebook/sam3 weights.
+model:
+  family: sam3
+  name: facebook/sam3
+  checkpoint: weights/sam3
+
+data:
+  root: data
+  download: false           # server: data pre-copied
+  calib_samples: 32
+  eval_samples: 64
+  prompt_grid: 4
+
+quant:
+  weight: {bits: 4, fmt: fp4, symmetric: true, per_channel: true, observer: mse}
+  activation: {bits: 4, fmt: fp4, symmetric: true, per_channel: false, observer: mse}
+
+smoothquant:
+  enabled: true
+  alpha: 0.5
+
+adaround:
+  enabled: false            # uniform-grid method; not applicable to FP4 weights
+
+device: auto
+output_dir: outputs/sam3_wfp4afp4_advanced

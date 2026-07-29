@@ -1,0 +1,33 @@
+# SAM3 W-FP4 A8: FP4 (E2M1) weights + INT8 activations, advanced PTQ.
+# The FP4 counterpart of sam3_w4a8_advanced.yaml — same data/protocol, same
+# 8x theoretical weight compression — isolating what the non-uniform E2M1
+# grid buys over INT4 at identical bit budget. MSE clipping searches the clip
+# point on the FP4 grid; SmoothQuant applies unchanged (it acts before
+# quantization). AdaRound is off: its floor+offset rounding assumes a uniform
+# step, so FP4 weights keep round-to-nearest (it would be skipped anyway).
+# See configs/sam3.yaml for how to fetch the gated facebook/sam3 weights.
+model:
+  family: sam3
+  name: facebook/sam3
+  checkpoint: weights/sam3
+
+data:
+  root: data
+  download: false           # server: data pre-copied
+  calib_samples: 32
+  eval_samples: 64
+  prompt_grid: 4
+
+quant:
+  weight: {bits: 4, fmt: fp4, symmetric: true, per_channel: true, observer: mse}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: mse}
+
+smoothquant:
+  enabled: true
+  alpha: 0.5
+
+adaround:
+  enabled: false            # uniform-grid method; not applicable to FP4 weights
+
+device: auto
+output_dir: outputs/sam3_wfp4a8_advanced

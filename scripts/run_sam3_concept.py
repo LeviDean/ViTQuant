@@ -111,6 +111,8 @@ def main() -> None:
         "family": "sam3_concept",
         "device": str(device),
         "weight_bits": base_qc.weight.bits,
+        "weight_fmt": base_qc.weight.fmt,
+        "activation_fmt": base_qc.activation.fmt,
         "activation_bits": base_qc.activation.bits,
         "concept_consistency": sim_result,
     }

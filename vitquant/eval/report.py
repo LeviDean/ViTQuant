@@ -23,8 +23,11 @@ def pct(x: float) -> str:
     return f"{100 * x:.2f}%"
 
 
-def scheme_str(weight_bits: int, activation_bits: int) -> str:
-    return f"W{weight_bits}A{activation_bits}"
+def scheme_str(weight_bits: int, activation_bits: int,
+               weight_fmt: str = "int", activation_fmt: str = "int") -> str:
+    w = "FP4" if weight_fmt == "fp4" else str(weight_bits)
+    a = "FP4" if activation_fmt == "fp4" else str(activation_bits)
+    return f"W{w}A{a}"
 
 
 def theoretical_compression_section(weight_bits: int) -> str:
@@ -68,7 +71,8 @@ def classification_report(r: dict) -> str:
     trade-off, and scheme ablation."""
     fp32_t, int8_s = r["fp32_torch"], r["int8_simulated"]
     wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
-    scheme = scheme_str(wbits, abits)
+    scheme = scheme_str(wbits, abits, r.get("weight_fmt", "int"),
+                        r.get("activation_fmt", "int"))
 
     acc_rows = [
         ["FP32 (PyTorch)", pct(fp32_t["top1"]), pct(fp32_t["top5"]), "-"],
@@ -116,7 +120,8 @@ def sam_report(r: dict) -> str:
     encoder is quantized."""
     sim = r["iou_simulated"]
     wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
-    scheme = scheme_str(wbits, abits)
+    scheme = scheme_str(wbits, abits, r.get("weight_fmt", "int"),
+                        r.get("activation_fmt", "int"))
     grid = r.get("prompt_grid", 1)
     prompts = (f"a {grid}x{grid} grid of point prompts per image (covering the whole image)"
               if grid > 1 else "a single center-point prompt per image")
@@ -173,7 +178,8 @@ def sam3_concept_report(r: dict) -> str:
     compression, plus sensitivity / mixed-precision tables when present."""
     c = r["concept_consistency"]
     wbits, abits = r.get("weight_bits", 8), r.get("activation_bits", 8)
-    scheme = scheme_str(wbits, abits)
+    scheme = scheme_str(wbits, abits, r.get("weight_fmt", "int"),
+                        r.get("activation_fmt", "int"))
     algos = []
     if r.get("smoothquant"):
         algos.append(f"SmoothQuant (alpha={r['smoothquant']['alpha']})")

@@ -76,7 +76,9 @@ def main() -> None:
     base_qc = qconfig_from_dict(cfg["quant"])
     results: dict = {"model": name, "device": str(device),
                      "weight_bits": base_qc.weight.bits,
-                     "activation_bits": base_qc.activation.bits}
+                     "weight_fmt": base_qc.weight.fmt,
+                     "activation_bits": base_qc.activation.bits,
+                     "activation_fmt": base_qc.activation.fmt}
 
     print(f"Loading checkpoint {ckpt} ...")
     model, data_cfg = load_model(name, ckpt)

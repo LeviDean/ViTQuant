@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from vitquant.quant.formats import fp4_round
 from vitquant.quant.observers import build_observer, qrange
 from vitquant.quant.qconfig import TensorQConfig
 
@@ -24,6 +25,19 @@ def fake_quantize(x: torch.Tensor, scale: torch.Tensor, zero_point: torch.Tensor
     q = torch.clamp(q + zero_point, qmin, qmax)
     dq = (q - zero_point) * scale
     return x + (dq - x).detach()  # STE: forward=dq, backward=identity
+
+
+def fake_quantize_fp4(x: torch.Tensor, scale: torch.Tensor,
+                      ch_axis: int | None = None) -> torch.Tensor:
+    """FP4 (E2M1) quantize -> dequantize with STE: nearest value on the
+    non-uniform floating-point grid, scaled so amax maps to 6. Symmetric by
+    construction — no zero point, no clamp (the grid ends at +-6)."""
+    if ch_axis is not None:
+        shape = [1] * x.dim()
+        shape[ch_axis] = -1
+        scale = scale.reshape(shape)
+    dq = fp4_round(x / scale) * scale
+    return x + (dq - x).detach()
 
 
 class FakeQuantize(nn.Module):
@@ -59,8 +73,10 @@ class FakeQuantize(nn.Module):
         if self.observing:
             self.observer(x)
         if self.quantizing:
-            qmin, qmax = qrange(self.cfg.bits, self.cfg.symmetric)
             ch_axis = self.cfg.ch_axis if self.cfg.per_channel else None
+            if self.cfg.fmt == "fp4":
+                return fake_quantize_fp4(x, self.scale.to(x.device), ch_axis)
+            qmin, qmax = qrange(self.cfg.bits, self.cfg.symmetric)
             offset = self.round_offset.to(x.device) if self.round_offset.numel() else None
             return fake_quantize(x, self.scale.to(x.device),
                                  self.zero_point.to(x.device), qmin, qmax, ch_axis,

@@ -189,11 +189,19 @@ def adaround(model: nn.Module, batches: Iterable[Any], device: torch.device,
     batches = list(batches)
 
     groups: dict[str, list[tuple[str, nn.Module]]] = {}
+    n_fp4 = 0
     for name, m in model.named_modules():
         if (isinstance(getattr(m, "weight_fq", None), FakeQuantize)
                 and isinstance(getattr(m, "weight", None), torch.Tensor)):
             assert m.weight_fq.is_frozen, f"adaround before calibration: {name}"
+            if m.weight_fq.cfg.fmt == "fp4":
+                # AdaRound's floor+offset parameterization assumes a uniform
+                # step; FP4's non-uniform grid keeps round-to-nearest.
+                n_fp4 += 1
+                continue
             groups.setdefault(group_key(f"{name}.weight_fq"), []).append((name, m))
+    if n_fp4 and log is not None:
+        log(f"skipping {n_fp4} FP4 weight layer(s): AdaRound needs a uniform grid")
 
     gen = torch.Generator().manual_seed(seed)
     for gi, (gkey, mods) in enumerate(groups.items()):
