@@ -18,7 +18,8 @@ def mask_iou(a: torch.Tensor, b: torch.Tensor) -> float:
 
 @torch.no_grad()
 def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
-                             samples: list[dict], device: torch.device) -> dict:
+                             samples: list[dict], device: torch.device,
+                             oracle_match: bool = False) -> dict:
     """Self-consistency check (no ground truth needed): for the same
     image+prompts, compare fp32 vs quantized-vision-encoder predicted masks
     via IoU, per (point prompt, mask hypothesis) pair. Samples may carry a
@@ -31,13 +32,27 @@ def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
     not a substitute for full-resolution mIoU against ground truth.
     mean_iou/min_iou aggregate equally across every (sample, point, mask
     hypothesis) triple, not weighted per image. Returns {"per_sample_iou":
-    [[iou_per_point_and_mask], ...], "mean_iou": float, "min_iou": float}."""
+    [[iou_per_point_and_mask], ...], "mean_iou": float, "min_iou": float}.
+
+    oracle_match adds a diagnostic that separates two failure modes the
+    slot-aligned score conflates. The standard score compares hypothesis slot
+    m against slot m; under heavy quantization a point's mask can survive but
+    land in a DIFFERENT slot (the granularity ordering shuffles), which scores
+    ~0 exactly like a genuinely destroyed mask. With oracle_match each fp32
+    hypothesis instead takes its best IoU over ALL of the quantized model's
+    hypotheses at the same point — an upper bound with hypothesis choice
+    factored out. oracle_mean_iou >> mean_iou means the regions are still
+    segmented and only the slot assignment flipped; oracle ≈ standard means
+    the masks themselves degraded. Adds oracle_* keys (same aggregation);
+    costs H extra mask_iou calls per pair, no extra forward passes."""
     assert samples, "evaluate_sam_consistency: samples is empty"
     fp32_model = fp32_model.eval().to(device)
     quant_model = quant_model.eval().to(device)
 
     per_sample = []
     all_ious = []
+    oracle_per_sample = []
+    oracle_all = []
     for inputs in samples:
         inputs = {k: v.to(device) for k, v in inputs.items()}
         fp32_masks = fp32_model(**inputs).pred_masks > MASK_THRESHOLD
@@ -50,12 +65,23 @@ def evaluate_sam_consistency(fp32_model: nn.Module, quant_model: nn.Module,
                 for p in range(num_points) for m in range(num_masks)]
         per_sample.append(ious)
         all_ious.extend(ious)
+        if oracle_match:
+            oracle = [max(mask_iou(fp32_masks[0, p, m], quant_masks[0, p, mq])
+                          for mq in range(num_masks))
+                      for p in range(num_points) for m in range(num_masks)]
+            oracle_per_sample.append(oracle)
+            oracle_all.extend(oracle)
 
-    return {
+    result = {
         "per_sample_iou": per_sample,
         "mean_iou": sum(all_ious) / len(all_ious),
         "min_iou": min(all_ious),
     }
+    if oracle_match:
+        result["oracle_per_sample_iou"] = oracle_per_sample
+        result["oracle_mean_iou"] = sum(oracle_all) / len(oracle_all)
+        result["oracle_min_iou"] = min(oracle_all)
+    return result
 
 
 def block_sensitivity_sam(quant_model: nn.Module, fp32_model: nn.Module,

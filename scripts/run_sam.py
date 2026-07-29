@@ -48,6 +48,12 @@ def main() -> None:
                     help="save the calibrated quantization state (quantized_state.pt + "
                          "quant_meta.json) into output_dir, for later label-free "
                          "inference via scripts/infer_sam.py — skips recalibration/AdaRound")
+    ap.add_argument("--oracle-match", action="store_true",
+                    help="diagnostic: also score each fp32 mask against the BEST of the "
+                         "quantized model's mask hypotheses (not just the same slot). A "
+                         "large oracle-vs-standard gap means low IoU comes from hypothesis-"
+                         "slot flips, not from degraded masks; near-zero gap means the "
+                         "masks themselves collapsed. No extra forward passes")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -115,9 +121,13 @@ def main() -> None:
         print(f"Saved quantized state to {path}")
 
     print("Evaluating simulated self-consistency (fp32 vs fake-quant masks) ...")
-    sim_result = evaluate_sam_consistency(fp32_model, quant_model, eval_samples, device)
+    sim_result = evaluate_sam_consistency(fp32_model, quant_model, eval_samples,
+                                          device, oracle_match=args.oracle_match)
     print(f"\nsimulated mean IoU: {sim_result['mean_iou']:.4f}")
     print(f"simulated min IoU:  {sim_result['min_iou']:.4f}")
+    if args.oracle_match:
+        print(f"oracle-match mean IoU: {sim_result['oracle_mean_iou']:.4f} "
+              "(best over mask hypotheses; gap vs standard = hypothesis-slot flips)")
 
     out = Path(cfg["output_dir"])
     results = {

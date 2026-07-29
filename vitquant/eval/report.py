@@ -135,13 +135,20 @@ def sam_report(r: dict) -> str:
              f"Evaluation uses {prompts}; IoU aggregates over every "
              "(image, point, mask-hypothesis) triple.\n",
              "## Self-Consistency IoU (fp32 vs simulated-quant masks)\n",
-             md_table(["Variant", "Mean IoU", "Min IoU"], [
-                 [f"{scheme} simulated (custom kernel, fake-quant)",
-                  f"{sim['mean_iou']:.4f}", f"{sim['min_iou']:.4f}"],
-             ]),
+             md_table(["Variant", "Mean IoU", "Min IoU"],
+                      [[f"{scheme} simulated (custom kernel, fake-quant)",
+                        f"{sim['mean_iou']:.4f}", f"{sim['min_iou']:.4f}"]]
+                      + ([[f"{scheme} oracle-match (best over mask hypotheses)",
+                           f"{sim['oracle_mean_iou']:.4f}",
+                           f"{sim['oracle_min_iou']:.4f}"]]
+                         if "oracle_mean_iou" in sim else [])),
              "\nHigh IoU means quantization barely changed the predicted masks vs "
              "the fp32 model. These are self-consistency scores (fp32 vs quantized "
-             "on the same inputs), not ground-truth mIoU against a labeled benchmark.",
+             "on the same inputs), not ground-truth mIoU against a labeled benchmark."
+             + ("\n\nOracle-match scores each fp32 mask against the best of the "
+                "quantized model's hypotheses at the same point: the gap between the "
+                "two rows is the share of the drop caused by hypothesis-slot flips "
+                "rather than degraded masks." if "oracle_mean_iou" in sim else ""),
              "\n" + theoretical_compression_section(wbits)]
 
     if "sensitivity" in r:
