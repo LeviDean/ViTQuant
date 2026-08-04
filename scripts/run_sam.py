@@ -21,7 +21,7 @@ from vitquant.models.sam_loader import load_sam3_model, load_sam_model
 from vitquant.quant.persist import save_quantized
 from vitquant.quant.qconfig import qconfig_from_dict
 from vitquant.quant.sam_calibrate import adaround_sam, calibrate_sam, smooth_quant_sam
-from vitquant.quant.sam_convert import convert_sam_vision_encoder
+from vitquant.quant.sam_convert import convert_sam_modules, resolve_scope
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
 from vitquant.utils.progress import calib_progress
@@ -89,9 +89,11 @@ def main() -> None:
                                     seed=1, download=d["download"], grid=grid,
                                     with_labels=with_labels)
 
-    print("Converting + calibrating quantized vision encoder ...")
+    scope_cfg = cfg["quant"].get("scope", ["vision_encoder"])
     quant_model, _ = load_model(cfg["model"]["name"], cfg["model"]["checkpoint"])
-    convert_sam_vision_encoder(quant_model, base_qc)
+    scope = resolve_scope(quant_model, scope_cfg)
+    print(f"Converting + calibrating quantized modules: {', '.join(scope)} ...")
+    convert_sam_modules(quant_model, base_qc, scope)
     sq = cfg.get("smoothquant") or {}
     if sq.get("enabled"):
         sq_alpha = float(sq.get("alpha", 0.5))
@@ -112,7 +114,7 @@ def main() -> None:
     if args.save_quantized:
         meta = {"model": cfg["model"]["name"], "family": family,
                 "checkpoint": cfg["model"]["checkpoint"], "quant": cfg["quant"],
-                "prompt_grid": grid}
+                "quant_scope": scope, "prompt_grid": grid}
         if sq.get("enabled"):
             meta["smoothquant"] = {"alpha": float(sq.get("alpha", 0.5))}
         if ar.get("enabled"):
@@ -139,6 +141,7 @@ def main() -> None:
         "activation_fmt": base_qc.activation.fmt,
         "activation_bits": base_qc.activation.bits,
         "prompt_grid": grid,
+        "quant_scope": scope,
         "iou_simulated": sim_result,
     }
     if ar.get("enabled"):

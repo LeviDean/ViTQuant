@@ -4,8 +4,10 @@ the shared PE vision encoder and report fp32-vs-quantized instance-set
 self-consistency — each image is prompted with its own Imagenette class name,
 the two models' instance sets are greedy-matched by mask IoU, and
 consistency = sum(matched IoU) / max(n_fp32, n_quant), so missed and
-hallucinated instances both count against the score. Text encoder, DETR
-decoder and mask head stay fp32.
+hallucinated instances both count against the score. By default only the
+shared vision encoder is quantized; quant.scope in the config widens this to
+any set of top-level modules (text_encoder, detr_encoder/decoder, mask
+decoder, ... or "all") — everything not in scope stays fp32.
 
 The point-prompt counterpart is scripts/run_sam.py (family: sam | sam3);
 reporting, progress, calibration and the advanced-PTQ switches are shared."""
@@ -23,7 +25,7 @@ from vitquant.models.sam_loader import load_sam3_concept_model
 from vitquant.quant.persist import save_quantized
 from vitquant.quant.qconfig import qconfig_from_dict
 from vitquant.quant.sam_calibrate import adaround_sam, calibrate_sam, smooth_quant_sam
-from vitquant.quant.sam_convert import convert_sam_vision_encoder
+from vitquant.quant.sam_convert import convert_sam_modules, resolve_scope
 from vitquant.utils.config import load_config
 from vitquant.utils.device import resolve_device
 from vitquant.utils.progress import calib_progress
@@ -65,10 +67,12 @@ def main() -> None:
     eval_samples = build_sam3_concept_samples(d["root"], processor, d["eval_samples"],
                                               seed=1, download=d["download"])
 
-    print("Converting + calibrating quantized vision encoder ...")
+    scope_cfg = cfg["quant"].get("scope", ["vision_encoder"])
     quant_model, _ = load_sam3_concept_model(cfg["model"]["name"],
                                              cfg["model"]["checkpoint"])
-    convert_sam_vision_encoder(quant_model, base_qc)
+    scope = resolve_scope(quant_model, scope_cfg)
+    print(f"Converting + calibrating quantized modules: {', '.join(scope)} ...")
+    convert_sam_modules(quant_model, base_qc, scope)
     sq = cfg.get("smoothquant") or {}
     if sq.get("enabled"):
         sq_alpha = float(sq.get("alpha", 0.5))
@@ -88,7 +92,8 @@ def main() -> None:
 
     if args.save_quantized:
         meta = {"model": cfg["model"]["name"], "family": "sam3_concept",
-                "checkpoint": cfg["model"]["checkpoint"], "quant": cfg["quant"]}
+                "checkpoint": cfg["model"]["checkpoint"], "quant": cfg["quant"],
+                "quant_scope": scope}
         if sq.get("enabled"):
             meta["smoothquant"] = {"alpha": float(sq.get("alpha", 0.5))}
         if ar.get("enabled"):
@@ -114,6 +119,7 @@ def main() -> None:
         "weight_fmt": base_qc.weight.fmt,
         "activation_fmt": base_qc.activation.fmt,
         "activation_bits": base_qc.activation.bits,
+        "quant_scope": scope,
         "concept_consistency": sim_result,
     }
     if ar.get("enabled"):

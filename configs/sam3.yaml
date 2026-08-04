@@ -29,6 +29,11 @@ data:
 quant:
   weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}
   activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+  # scope: which top-level modules to quantize (default: [vision_encoder]).
+  # Tracker (family sam/sam3) choices: vision_encoder, prompt_encoder,
+  # mask_decoder — or "all". Text-path modules only exist in the concept
+  # pipeline (run_sam3_concept.py); see sam3_concept_full_w8a8.yaml.
+  # scope: [vision_encoder]
 
 device: auto
 output_dir: outputs/sam3_w8a8

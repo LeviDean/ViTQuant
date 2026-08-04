@@ -1,0 +1,35 @@
+# SAM3 concept segmentation with the WHOLE model quantized (W8A8): vision
+# encoder (454M) + text encoder (354M) + geometry/DETR/mask/scoring heads
+# (~25M) all fake-quantized — quant.scope: all. Compare against
+# sam3_concept.yaml (vision encoder only) to isolate what each extra module
+# costs; the DETR/scoring heads make detection decisions, so watch detection
+# F1 / instance counts, not just consistency.
+#
+# Text-encoder calibration statistics come from the calibration samples'
+# class-name prompts. If deployment uses a small fixed prompt set, consider
+# caching text embeddings offline instead of quantizing the text tower.
+model:
+  name: facebook/sam3
+  checkpoint: weights/sam3
+
+data:
+  root: data
+  download: true
+  calib_samples: 32
+  eval_samples: 64
+
+quant:
+  weight: {bits: 8, symmetric: true, per_channel: true, observer: mse}
+  activation: {bits: 8, symmetric: false, per_channel: false, observer: mse}
+  scope: all
+
+smoothquant:
+  enabled: true
+  alpha: 0.5
+
+adaround:
+  enabled: true
+  iters: 1000
+
+device: auto
+output_dir: outputs/sam3_concept_full_w8a8

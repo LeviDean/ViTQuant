@@ -90,27 +90,36 @@ def load_quantized_sam(artifact_dir, device=None, family: str | None = None):
 
     `family` overrides the artifact's own family. The supported cross-load is
     sam3 (tracker) <-> sam3_concept: both classes share the SAME vision
-    encoder (same checkpoint tensors, same module paths), and only the vision
-    encoder is quantized with image-only-dependent statistics — so a
-    quantization state calibrated through one entry point is exactly valid
-    for the other. SAM1 artifacts have no text path and cannot cross-load."""
+    encoder (same checkpoint tensors, same module paths), and its quantization
+    statistics are image-only-dependent — so a quantization state calibrated
+    through one entry point is exactly valid for the other, but ONLY when the
+    artifact's quant scope is the vision encoder alone. Modules outside it
+    (mask_decoder, text path) are different between the two classes, so a
+    wider-scope artifact refuses to cross-load. SAM1 artifacts have no text
+    path and cannot cross-load either."""
     from vitquant.models.sam_loader import (load_sam3_concept_model,
                                             load_sam3_model, load_sam_model)
     from vitquant.quant.qconfig import qconfig_from_dict
-    from vitquant.quant.sam_convert import convert_sam_vision_encoder
+    from vitquant.quant.sam_convert import DEFAULT_SCOPE, convert_sam_modules
 
     meta = read_meta(artifact_dir)
     use_family = family or meta["family"]
-    if family and {family, meta["family"]} - {"sam3", "sam3_concept"} \
-            and family != meta["family"]:
-        raise ValueError(
-            f"cannot load a {meta['family']} artifact as {family}: only the "
-            "sam3 tracker <-> sam3_concept pair shares its quantized encoder")
+    scope = meta.get("quant_scope", list(DEFAULT_SCOPE))
+    if family and family != meta["family"]:
+        if {family, meta["family"]} - {"sam3", "sam3_concept"}:
+            raise ValueError(
+                f"cannot load a {meta['family']} artifact as {family}: only the "
+                "sam3 tracker <-> sam3_concept pair shares its quantized encoder")
+        if sorted(scope) != ["vision_encoder"]:
+            raise ValueError(
+                f"cannot load a {meta['family']} artifact as {family}: its quant "
+                f"scope {scope} goes beyond the shared vision_encoder — the other "
+                "modules differ between the tracker and concept classes")
     loaders = {"sam": load_sam_model, "sam3": load_sam3_model,
                "sam3_concept": load_sam3_concept_model}
     model, processor = loaders[use_family](meta["model"], meta["checkpoint"])
     meta = {**meta, "family": use_family}
-    convert_sam_vision_encoder(model, qconfig_from_dict(meta["quant"]))
+    convert_sam_modules(model, qconfig_from_dict(meta["quant"]), scope)
     n = load_quant_state(model, artifact_dir)
     if device is not None:
         model = model.to(device)

@@ -114,6 +114,17 @@ def classification_report(r: dict) -> str:
     return "\n".join(parts) + "\n"
 
 
+def scope_note(r: dict, default_rest: str) -> str:
+    """One sentence naming what was quantized. Falls back to the historical
+    vision-encoder-only wording when results carry no quant_scope."""
+    scope = r.get("quant_scope")
+    if not scope or list(scope) == ["vision_encoder"]:
+        return f"Only `vision_encoder` is quantized; {default_rest}."
+    return ("Quantized modules (config `quant.scope`): "
+            + ", ".join(f"`{m}`" for m in scope)
+            + "; everything else stays fp32.")
+
+
 def sam_report(r: dict) -> str:
     """Markdown report for the SAM pipeline: self-consistency IoU (fp32 vs
     simulated-quant masks) + theoretical weight compression. Only the vision
@@ -130,8 +141,7 @@ def sam_report(r: dict) -> str:
              f"\nDevice: `{r['device']}`  ·  simulated (fake-quant) self-consistency "
              f"— device-independent, no real int8 kernel run.\n"
              + adaround_note(r),
-             "Only `vision_encoder` is quantized; `prompt_encoder` and "
-             "`mask_decoder` stay fp32. "
+             scope_note(r, "`prompt_encoder` and `mask_decoder` stay fp32") + " "
              f"Evaluation uses {prompts}; IoU aggregates over every "
              "(image, point, mask-hypothesis) triple.\n",
              "## Self-Consistency IoU (fp32 vs simulated-quant masks)\n",
@@ -201,9 +211,9 @@ def sam3_concept_report(r: dict) -> str:
              "Text-prompted concept segmentation (Sam3Model): each image is prompted "
              "with its own class name; fp32 and quantized instance sets are matched "
              "greedily by mask IoU. consistency = sum(matched IoU) / max(n_fp32, "
-             "n_quant) — misses and hallucinations both score 0. Only the shared "
-             "`vision_encoder` is quantized; text encoder, DETR decoder and mask "
-             "head stay fp32.\n",
+             "n_quant) — misses and hallucinations both score 0. "
+             + scope_note(r, "text encoder, DETR decoder and mask head stay fp32")
+             + "\n",
              "## Instance-Set Self-Consistency (fp32 vs simulated-quant)\n",
              md_table(["Metric", "Value"], [
                  ["Mean consistency", f"{c['mean_consistency']:.4f}"],
@@ -234,7 +244,7 @@ def sam3_concept_report(r: dict) -> str:
              "Compression vs FP32"], mp_rows))
 
     parts += ["\n## Scope\n",
-              "Only the shared PE vision encoder is quantized; `text_encoder`, "
-              "`detr_encoder`/`detr_decoder`, `geometry_encoder` and `mask_decoder` "
-              "remain fp32 PyTorch. Self-consistency, not ground-truth accuracy."]
+              scope_note(r, "`text_encoder`, `detr_encoder`/`detr_decoder`, "
+                            "`geometry_encoder` and `mask_decoder` remain fp32")
+              + " Self-consistency, not ground-truth accuracy."]
     return "\n".join(parts) + "\n"

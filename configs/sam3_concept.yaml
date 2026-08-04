@@ -16,6 +16,11 @@ data:
 quant:
   weight: {bits: 8, symmetric: true, per_channel: true, observer: minmax}
   activation: {bits: 8, symmetric: false, per_channel: false, observer: moving_avg}
+  # scope: which top-level modules to quantize (default: [vision_encoder]).
+  # Sam3Model choices: vision_encoder, text_encoder, text_projection,
+  # geometry_encoder, detr_encoder, detr_decoder, mask_decoder,
+  # dot_product_scoring — or the string "all". See sam3_concept_full_w8a8.yaml.
+  # scope: [vision_encoder]
 
 device: auto
 output_dir: outputs/sam3_concept_w8a8
