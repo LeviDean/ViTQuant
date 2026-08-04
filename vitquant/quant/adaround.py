@@ -207,6 +207,12 @@ def adaround(model: nn.Module, batches: Iterable[Any], device: torch.device,
     for gi, (gkey, mods) in enumerate(groups.items()):
         store = _capture_inputs(model, [m for _, m in mods], batches, device, feed)
         for name, m in mods:
+            if not store[m]:
+                if log is not None:
+                    log(f"[{gi + 1}/{len(groups)}] {name}: no captured inputs "
+                        "(dead path under calibration data) — keeping "
+                        "round-to-nearest")
+                continue
             near, ada, flipped = _optimize_module(m, store[m], device, iters, lr,
                                                   reg_weight, max_tokens, gen)
             if log is not None:

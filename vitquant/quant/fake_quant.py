@@ -94,17 +94,30 @@ def set_observing(model: nn.Module, enabled: bool) -> None:
 
 
 def set_quantizing(model: nn.Module, enabled: bool) -> None:
+    """Enabling only touches frozen quantizers — one that never derived
+    qparams (its path was never exercised by calibration data, e.g. a
+    geometry-prompt branch under image+text calibration) has an empty scale
+    and stays a pass-through instead of crashing the forward. Disabling
+    applies to every quantizer."""
     for m in model.modules():
         if isinstance(m, FakeQuantize):
-            m.quantizing = enabled
+            m.quantizing = enabled and m.is_frozen
 
 
-def freeze_qparams(model: nn.Module) -> None:
+def freeze_qparams(model: nn.Module) -> list[str]:
     """Derive qparams for every not-yet-frozen quantizer from its observer.
-    Already-frozen quantizers (weights) are left as-is."""
-    for m in model.modules():
+    Already-frozen quantizers (weights) are left as-is. A quantizer whose
+    observer saw no data (a dead path under the calibration prompt/data mix)
+    is left unfrozen — it stays fp32 pass-through — and its name is returned
+    so callers can warn."""
+    starved = []
+    for name, m in model.named_modules():
         if isinstance(m, FakeQuantize) and not m.is_frozen:
-            m.freeze()
+            if m.observer.has_stats:
+                m.freeze()
+            else:
+                starved.append(name)
+    return starved
 
 
 def calibrate_weights(model: nn.Module) -> None:

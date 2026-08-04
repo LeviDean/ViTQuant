@@ -42,7 +42,12 @@ def run_calibration(model: nn.Module, batches: Iterable[Any], device: torch.devi
             if progress is not None:
                 progress(i)
     set_observing(model, False)
-    freeze_qparams(model)  # activations; raises CalibrationError if none saw data
+    starved = freeze_qparams(model)  # activations that saw data
+    if starved:
+        shown = ", ".join(starved[:5]) + (" ..." if len(starved) > 5 else "")
+        print(f"    WARNING: {len(starved)} activation quantizer(s) saw no "
+              f"calibration data and stay fp32 pass-through (paths not "
+              f"exercised by this prompt/data mix): {shown}")
     set_quantizing(model, True)
     return model
 

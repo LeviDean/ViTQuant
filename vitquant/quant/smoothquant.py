@@ -67,7 +67,15 @@ def smooth_quant(model: nn.Module, batches: Iterable[Any], device: torch.device,
 
     amax = _collect_channel_amax(model, [m for _, m in linears],
                                  list(batches), device, feed)
+    starved = [name for name, m in linears if m not in amax]
+    if starved:
+        (log or print)(
+            f"skipping {len(starved)} QuantLinear(s) that saw no calibration "
+            f"data (dead paths, stay unsmoothed): {', '.join(starved[:5])}"
+            + (" ..." if len(starved) > 5 else ""))
     for name, m in linears:
+        if m not in amax:
+            continue
         act_amax = amax[m].clamp(min=1e-5)
         w_amax = m.weight.detach().abs().amax(dim=0).clamp(min=1e-5)
         s = act_amax.pow(alpha) / w_amax.pow(1.0 - alpha)
