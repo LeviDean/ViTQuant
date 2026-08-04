@@ -41,7 +41,15 @@ def _instances(model: nn.Module, processor, sample: dict,
 
 
 def pairwise_mask_iou(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """(Na, H, W) x (Nb, H, W) boolean masks -> (Na, Nb) IoU matrix."""
+    """(Na, H, W) x (Nb, H, W) boolean masks -> (Na, Nb) IoU matrix.
+
+    Either side may be empty (zero detections) — return the (Na, Nb) zero
+    matrix without touching pixels. Besides being the semantically right
+    answer, this must not assume the two sides share H×W in that case: HF's
+    post_process_instance_segmentation only interpolates non-empty results to
+    the target size, so an empty tensor keeps the model-space resolution."""
+    if len(a) == 0 or len(b) == 0:
+        return torch.zeros(len(a), len(b))
     fa = a.flatten(1).float()
     fb = b.flatten(1).float()
     inter = fa @ fb.T
